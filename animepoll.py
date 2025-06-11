@@ -15,6 +15,8 @@ POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
 
 #List of anime for polls
 POLL_LIST = []
+TOPANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
+custom_id_counter = -1
 
 # List of emotes for voting
 ORIGINAL_EMOTES = [
@@ -90,45 +92,32 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-   # if message.channel.id == REQUESTS_CHANNEL_ID and message.content.startswith('m.anime '):
-    #    anime_name = message.content.split('m.anime ')[1]
-     #   poll_channel = bot.get_channel(POLLS_CHANNEL_ID)
-        # Assuming the number of requests doesn't exceed the number of emotes.
-      #  emote = EMOTES.pop(0)  # Take the first emote and remove it from the list
-       # sent_message = await poll_channel.send(f"{emote} {anime_name}")
-        #await sent_message.add_reaction(emote)
     await bot.process_commands(message)
     
+@bot.command(name="createpoll")
+async def create_poll(ctx):
+    """Command to manually create polls from requests"""
+    # if ctx.channel.id != POLLS_CHANNEL_ID:
+    #     return
 
+    global EMOTES
+    global POLL_LIST
+    global custom_id_counter
 
-# @bot.command(name="createpoll")
-# async def create_poll(ctx):
-#     """Command to manually create polls from requests"""
-#     if ctx.channel.id != POLLS_CHANNEL_ID:
-#         return
-
-#     global EMOTES
-#     EMOTES = ORIGINAL_EMOTES.copy()
+    EMOTES = ORIGINAL_EMOTES.copy()
+    POLL_LIST.sort(key=lambda x: x[0].lower())
+    custom_id_counter = -1
+    TOPANIME_CACHE.clear()
     
-#     # Fetch the last # of messages from the requests channel
-#     request_channel = bot.get_channel(REQUESTS_CHANNEL_ID)
-#     messages = []
-#     async for message in request_channel.history(limit=1000):
-#         messages.append(message)
+    # Create polls using the extracted anime names
+    for idx, anime in enumerate(POLL_LIST):
+        if idx < len(EMOTES):
+            emote = EMOTES[idx]
+            sent_message = await ctx.send(f"{emote} {anime[0]}")
+            await sent_message.add_reaction(emote)
 
-
-#     # Extract anime names from messages that match the format "m.anime {anime name}"
-#     anime_requests = [msg.content.split('m.anime ')[1] for msg in messages if msg.content.startswith('m.anime ')]
-
-#     # Create polls using the extracted anime names
-#     for idx, anime_name in enumerate(anime_requests):
-#         if idx < len(EMOTES):
-#             emote = EMOTES[idx]
-#             sent_message = await ctx.send(f"{emote} {anime_name}")
-#             await sent_message.add_reaction(emote)
+    POLL_LIST = []
         
-
-
 # ---------- EMBED BUILDER ----------
 def make_anime_embed(media: dict) -> discord.Embed:
     """Builds a Discord embed from a single AniList Media dict."""
@@ -165,9 +154,6 @@ def make_anime_embed(media: dict) -> discord.Embed:
 
     genres = media.get("genres", [])
     embed.add_field(name="Genres", value=", ".join(genres[:4]) if genres else "—", inline=True)
-
-    # # Spacer to force description below fields
-    # embed.add_field(name="\u200b", value="\u200b", inline=False)
 
     # Description
     description = media.get("description", "No description available.").replace("<br>", "\n")
@@ -224,7 +210,7 @@ query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
 }
 '''
 
-    variables = {"search": title, "sort": ["POPULARITY_DESC"], "isAdult": False}
+    variables = {"search": title, "isAdult": False}
 
     r = requests.post(url, json={"query": query, "variables": variables})
     if r.status_code != 200:
@@ -235,73 +221,204 @@ query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
         return "No matching anime found."
 
     
-    return media[0]
-
-
-# ---------- BOT COMMAND EXAMPLE ----------
-@bot.command(name="anime")
-# !anime <title>
-# Command searches anilist for an anime under the given name and returns the top search result. 
-async def anime(ctx, *, anime_name: str):
-    if ctx.channel.id != REQUESTS_CHANNEL_ID:
-        print("wrong channel")
-        return
-    """!anime <title> – show AniList info for the most-popular match"""
-    anime_result = search_anime_embed(anime_name)
-
-    if isinstance(anime_result, str):
-        await ctx.send(anime_result)
-        return
-
-    result = make_anime_embed(anime_result)
-
-    #filters dupes
-    if any(entry[1] == anime_result["id"] for entry in POLL_LIST):
-        await ctx.send("That has already been added to the poll list.")
-        return
-
-    poll_item = [anime_result["title"]["english"], anime_result["id"]]
-    POLL_LIST.append(poll_item)
-    print(POLL_LIST)
-
-    if isinstance(result, discord.Embed):
-        await ctx.send(embed=result)
-    else:
-        await ctx.send(result)
+    # return media[0]
+    return media
 
 # ---------- Poll Viewer
 @bot.command(name="viewpoll")
 async def viewpoll(ctx):
-    """View the current contents of the poll"""
-    for anime in POLL_LIST:
-        await ctx.send(anime[0])
+    """View all items in the poll List"""
+    if POLL_LIST == []:
+        await ctx.send("The poll list is empty")
 
-# ---------- Poll Maker
-@bot.command(name="createpoll")
-async def create_poll(ctx):
-    """Command to manually create polls from requests"""
-    if ctx.channel.id != POLLS_CHANNEL_ID:
+    for anime in POLL_LIST:
+        POLL_LIST.sort(key=lambda x: x[0].lower())
+        await ctx.send(f"{anime[0]} ({anime[1]})")
+
+#------ top 5 search results getter
+@bot.command(name="anime")
+async def anime(ctx, *, anime_name: str):
+    """Searches for an anime from anilist and shows the top 5. If in the set request channe adds to the poll list otherwise shows anime details"""
+    global custom_id_counter
+
+    result = search_anime_embed(anime_name)
+
+    if isinstance(result, str):
+        await ctx.send(f"No results found for **{anime_name}**.")
+        await ctx.send("React with ✅ within 30 seconds to add it manually to the poll list.")
+
+        confirm_msg = await ctx.send("Do you want to add it as a custom entry?")
+        await confirm_msg.add_reaction("✅")
+
+        def check(reaction, user):
+            return (
+                user == ctx.author
+                and str(reaction.emoji) == "✅"
+                and reaction.message.id == confirm_msg.id
+            )
+
+        try:
+            await bot.wait_for("reaction_add", timeout=30.0, check=check)
+        except asyncio.TimeoutError:
+            await ctx.send("⏳ Timed out. Custom entry not added.")
+            return
+
+        custom_title = anime_name.strip()
+        POLL_LIST.append([custom_title, custom_id_counter])
+        await ctx.send(f"✅ Added custom anime **{custom_title}** to the poll list.")
+        custom_id_counter -= 1
         return
 
-    global EMOTES
-    EMOTES = ORIGINAL_EMOTES.copy()
-    
-    # Fetch the last # of messages from the requests channel
-    request_channel = bot.get_channel(REQUESTS_CHANNEL_ID)
-    messages = []
-    async for message in request_channel.history(limit=1000):
-        messages.append(message)
+    # Build embed with top results
+    first = result[0]
+    cover_url = first.get("coverImage", {}).get("medium") or first.get("coverImage", {}).get("large")
+
+    embed = discord.Embed(
+        title=f'Top results for “{anime_name}”',
+        description="React with a number to select, or ❌ to cancel.",
+        color=discord.Color.blue(),
+    )
+    if cover_url:
+        embed.set_thumbnail(url=cover_url)
+
+    # Build the list line with numbered options, only up to 5 results
+    nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    display_titles = []
+
+    # First line: first three titles
+    line1 = []
+    for i, anime in enumerate(result[:3]):
+        title = anime["title"].get("english") or anime["title"].get("romaji") or "Unknown"
+        line1.append(f"{nums[i]}  {title}")
+    line1_str = "     ".join(line1)  # 5 spaces for horizontal spacing
+
+    # Second line: last two titles (if present)
+    line2 = []
+    for i, anime in enumerate(result[3:5], start=3):
+        title = anime["title"].get("english") or anime["title"].get("romaji") or "Unknown"
+        line2.append(f"{nums[i]}  {title}")
+    line2_str = "     ".join(line2) if line2 else ""
+
+    # Combine with vertical spacing between lines
+    formatted_display = f"{line1_str}\n\n{line2_str}" if line2_str else line1_str
 
 
-    # Extract anime names from messages that match the format "m.anime {anime name}"
-    anime_requests = [msg.content.split('m.anime ')[1] for msg in messages if msg.content.startswith('m.anime ')]
 
-    # Create polls using the extracted anime names
-    for idx, anime in enumerate(POLL_LIST):
-        if idx < len(EMOTES):
-            emote = EMOTES[idx]
-            sent_message = await ctx.send(f"{emote} {anime[0]}")
-            await sent_message.add_reaction(emote)
+    # Combine lines with a newline
+    field_value = line1_str
+    if line2_str:
+        field_value += "\n" + line2_str
 
+    embed.add_field(name="\u200b", value=field_value, inline=False)
+
+    msg = await ctx.send(embed=embed)
+
+    # Add reactions for selection + cancel
+    for i in range(min(5, len(result))):
+        await msg.add_reaction(nums[i])
+    await msg.add_reaction("❌")
+
+    # Cache the search results for reaction handling
+    TOPANIME_CACHE[msg.id] = {
+        "animes": result[:5],
+        "user_id": ctx.author.id,
+    }
+# -------------------------------------------------------
+#  Reaction handler  (selection / cancel)
+# -------------------------------------------------------
+@bot.event
+async def on_reaction_add(reaction, user):
+    # ignore bot reactions
+    if user.bot:
+        return
+
+    payload = TOPANIME_CACHE.get(reaction.message.id)
+    if not payload:
+        return  # reaction isn't for a topanime message
+
+    # only command author may react
+    if user.id != payload["user_id"]:
+        await reaction.message.channel.send(
+            f"{user.mention} only the command author can make a selection."
+        )
+        await reaction.remove(user)
+        return
+
+    emoji = str(reaction.emoji)
+    nums  = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+
+    # ---------- CANCEL ----------
+    if emoji == "❌":
+        del TOPANIME_CACHE[reaction.message.id]
+        await reaction.message.channel.send("Selection cancelled.")
+        await reaction.message.clear_reactions()
+        return
+
+    # ---------- NUMBER PICK ----------
+    if emoji not in nums:
+        return  # some other emoji
+
+    index = nums.index(emoji)
+    animes = payload["animes"]
+    if index >= len(animes):
+        return  # should never happen
+
+    chosen = animes[index]  # dict for the anime
+    anime_id = chosen["id"]
+    title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
+
+    #doesnt add item to poll list if not in set request channel
+    if reaction.message.channel.id == REQUESTS_CHANNEL_ID: 
+        # duplicate check
+        if any(entry[1] == anime_id for entry in POLL_LIST):
+            await reaction.message.channel.send(
+                f" **{title_en}** is already in the poll list."
+            )
+        else:
+            POLL_LIST.append([title_en, anime_id])
+            await reaction.message.channel.send(
+                f"Added **{title_en}** to the poll list!"
+            )
+            embed = make_anime_embed(chosen)
+            await reaction.message.channel.send(embed=embed)
+    else:
+        embed = make_anime_embed(chosen)
+        await reaction.message.channel.send(embed=embed)
+
+
+    # clean up
+    del TOPANIME_CACHE[reaction.message.id]
+    await reaction.message.clear_reactions()
+
+def next_negative_id() -> int:
+    """Return the next available negative ID (-1, -2, …) not yet used."""
+    used = {entry[1] for entry in POLL_LIST if isinstance(entry[1], int) and entry[1] < 0}
+    n = -1
+    while n in used:
+        n -= 1
+    return n
+
+@bot.command(name="remove")
+async def remove(ctx, anime_id: str):
+    """Remove an item from the poll list using the anime id"""
+    global POLL_LIST
+
+    try:
+        anime_id_int = int(anime_id)
+
+        # find the first matching entry (returns None if not found)
+        removed = next((e for e in POLL_LIST if e[1] == anime_id_int), None)
+
+        if removed is None:
+            await ctx.send("❌ No anime with that ID is in the poll list.")
+            return
+
+        # rebuild list without the removed entry
+        POLL_LIST = [e for e in POLL_LIST if e[1] != anime_id_int]
+
+        await ctx.send(f"✅ **{removed[0]}** has been removed from the poll list.")
+
+    except ValueError:
+        await ctx.send("❌ Invalid ID. Please enter a numeric ID.")
 
 bot.run(TOKEN)
