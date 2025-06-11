@@ -101,31 +101,31 @@ async def on_message(message):
     
 
 
-@bot.command(name="createpoll")
-async def create_poll(ctx):
-    """Command to manually create polls from requests"""
-    if ctx.channel.id != POLLS_CHANNEL_ID:
-        return
+# @bot.command(name="createpoll")
+# async def create_poll(ctx):
+#     """Command to manually create polls from requests"""
+#     if ctx.channel.id != POLLS_CHANNEL_ID:
+#         return
 
-    global EMOTES
-    EMOTES = ORIGINAL_EMOTES.copy()
+#     global EMOTES
+#     EMOTES = ORIGINAL_EMOTES.copy()
     
-    # Fetch the last # of messages from the requests channel
-    request_channel = bot.get_channel(REQUESTS_CHANNEL_ID)
-    messages = []
-    async for message in request_channel.history(limit=1000):
-        messages.append(message)
+#     # Fetch the last # of messages from the requests channel
+#     request_channel = bot.get_channel(REQUESTS_CHANNEL_ID)
+#     messages = []
+#     async for message in request_channel.history(limit=1000):
+#         messages.append(message)
 
 
-    # Extract anime names from messages that match the format "m.anime {anime name}"
-    anime_requests = [msg.content.split('m.anime ')[1] for msg in messages if msg.content.startswith('m.anime ')]
+#     # Extract anime names from messages that match the format "m.anime {anime name}"
+#     anime_requests = [msg.content.split('m.anime ')[1] for msg in messages if msg.content.startswith('m.anime ')]
 
-    # Create polls using the extracted anime names
-    for idx, anime_name in enumerate(anime_requests):
-        if idx < len(EMOTES):
-            emote = EMOTES[idx]
-            sent_message = await ctx.send(f"{emote} {anime_name}")
-            await sent_message.add_reaction(emote)
+#     # Create polls using the extracted anime names
+#     for idx, anime_name in enumerate(anime_requests):
+#         if idx < len(EMOTES):
+#             emote = EMOTES[idx]
+#             sent_message = await ctx.send(f"{emote} {anime_name}")
+#             await sent_message.add_reaction(emote)
         
 
 
@@ -272,10 +272,36 @@ async def anime(ctx, *, anime_name: str):
 # ---------- Poll Viewer
 @bot.command(name="viewpoll")
 async def viewpoll(ctx):
+    """View the current contents of the poll"""
     for anime in POLL_LIST:
         await ctx.send(anime[0])
 
+# ---------- Poll Maker
+@bot.command(name="createpoll")
+async def create_poll(ctx):
+    """Command to manually create polls from requests"""
+    if ctx.channel.id != POLLS_CHANNEL_ID:
+        return
 
+    global EMOTES
+    EMOTES = ORIGINAL_EMOTES.copy()
+    
+    # Fetch the last # of messages from the requests channel
+    request_channel = bot.get_channel(REQUESTS_CHANNEL_ID)
+    messages = []
+    async for message in request_channel.history(limit=1000):
+        messages.append(message)
+
+
+    # Extract anime names from messages that match the format "m.anime {anime name}"
+    anime_requests = [msg.content.split('m.anime ')[1] for msg in messages if msg.content.startswith('m.anime ')]
+
+    # Create polls using the extracted anime names
+    for idx, anime in enumerate(POLL_LIST):
+        if idx < len(EMOTES):
+            emote = EMOTES[idx]
+            sent_message = await ctx.send(f"{emote} {anime[0]}")
+            await sent_message.add_reaction(emote)
 
 
 bot.run(TOKEN)
