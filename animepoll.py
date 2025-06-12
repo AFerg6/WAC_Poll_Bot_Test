@@ -15,7 +15,7 @@ POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
 
 #List of anime for polls
 POLL_LIST = []
-TOPANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
+ANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
 custom_id_counter = -1
 
 # List of emotes for voting
@@ -97,17 +97,22 @@ async def on_message(message):
 @bot.command(name="createpoll")
 async def create_poll(ctx):
     """Command to manually create polls from requests"""
-    # if ctx.channel.id != POLLS_CHANNEL_ID:
-    #     return
+    if ctx.channel.id != POLLS_CHANNEL_ID:
+        return
+    
+    perms = ctx.author.guild_permissions  
+    if not perms.kick_members:
+        return
 
     global EMOTES
     global POLL_LIST
     global custom_id_counter
 
     EMOTES = ORIGINAL_EMOTES.copy()
+    #sorts list alphabetically, resets custom id counter and clears message cache
     POLL_LIST.sort(key=lambda x: x[0].lower())
     custom_id_counter = -1
-    TOPANIME_CACHE.clear()
+    ANIME_CACHE.clear()
     
     # Create polls using the extracted anime names
     for idx, anime in enumerate(POLL_LIST):
@@ -116,6 +121,7 @@ async def create_poll(ctx):
             sent_message = await ctx.send(f"{emote} {anime[0]}")
             await sent_message.add_reaction(emote)
 
+    #clear poll list
     POLL_LIST = []
         
 # ---------- EMBED BUILDER ----------
@@ -161,22 +167,13 @@ def make_anime_embed(media: dict) -> discord.Embed:
 
     # Links
     anilist_link = media.get("siteUrl")
-    mal_link = None
-    for link in media.get("externalLinks", []):
-        if link.get("site", "").lower() == "myanimelist":
-            mal_link = link.get("url")
-            break
-
     link_text = f"[AniList]({anilist_link})"
-    if mal_link:
-        link_text += f" - [MyAnimeList]({mal_link})"
-
     embed.add_field(name="Links", value=link_text, inline=False)
 
     return embed
 
-# ---------- SEARCH + EMBED ----------
-def search_anime_embed(title: str):
+# ---------- ANILSIT SEARCH  ----------
+def search_anime(title: str):
     """Search AniList for <title>, return an Embed for the most-popular match (or an error string)."""
     url = "https://graphql.anilist.co"
     query = '''
@@ -220,28 +217,34 @@ query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
     if not media:
         return "No matching anime found."
 
-    
-    # return media[0]
     return media
 
-# ---------- Poll Viewer
+# ---------- Poll Viewer ----------
 @bot.command(name="viewpoll")
-async def viewpoll(ctx):
+async def view_poll(ctx):
     """View all items in the poll List"""
+
+    #lock out command to execs only
+    perms = ctx.author.guild_permissions  
+    if not perms.kick_members:
+        return
+
+    #Sends empty list msg if poll list is empty
     if POLL_LIST == []:
         await ctx.send("The poll list is empty")
 
+    #prints all items in poll sorted alphabetically
     for anime in POLL_LIST:
         POLL_LIST.sort(key=lambda x: x[0].lower())
         await ctx.send(f"{anime[0]} ({anime[1]})")
 
-#------ top 5 search results getter
+#------ ANIME SEARCH
 @bot.command(name="anime")
 async def anime(ctx, *, anime_name: str):
     """Searches for an anime from anilist and shows the top 5. If in the set request channe adds to the poll list otherwise shows anime details"""
     global custom_id_counter
 
-    result = search_anime_embed(anime_name)
+    result = search_anime(anime_name)
 
     if isinstance(result, str):
         await ctx.send(f"No results found for **{anime_name}**.")
@@ -319,22 +322,22 @@ async def anime(ctx, *, anime_name: str):
     await msg.add_reaction("❌")
 
     # Cache the search results for reaction handling
-    TOPANIME_CACHE[msg.id] = {
+    ANIME_CACHE[msg.id] = {
         "animes": result[:5],
         "user_id": ctx.author.id,
     }
-# -------------------------------------------------------
-#  Reaction handler  (selection / cancel)
-# -------------------------------------------------------
+
+# ----- REACTION HANDLER  (SELECTION / CANCEL) -------
 @bot.event
 async def on_reaction_add(reaction, user):
     # ignore bot reactions
     if user.bot:
         return
 
-    payload = TOPANIME_CACHE.get(reaction.message.id)
+    #save message to cache to keep interactivity active
+    payload = ANIME_CACHE.get(reaction.message.id)
     if not payload:
-        return  # reaction isn't for a topanime message
+        return  # reaction isn't for an anime message
 
     # only command author may react
     if user.id != payload["user_id"]:
@@ -349,7 +352,7 @@ async def on_reaction_add(reaction, user):
 
     # ---------- CANCEL ----------
     if emoji == "❌":
-        del TOPANIME_CACHE[reaction.message.id]
+        del ANIME_CACHE[reaction.message.id]
         await reaction.message.channel.send("Selection cancelled.")
         await reaction.message.clear_reactions()
         return
@@ -387,9 +390,10 @@ async def on_reaction_add(reaction, user):
 
 
     # clean up
-    del TOPANIME_CACHE[reaction.message.id]
+    del ANIME_CACHE[reaction.message.id]
     await reaction.message.clear_reactions()
 
+#-------- CUSTOM ID GENERATION HANDLER -------
 def next_negative_id() -> int:
     """Return the next available negative ID (-1, -2, …) not yet used."""
     used = {entry[1] for entry in POLL_LIST if isinstance(entry[1], int) and entry[1] < 0}
@@ -398,10 +402,15 @@ def next_negative_id() -> int:
         n -= 1
     return n
 
+#-------- REMOVE ITEM FROM POLL --------
 @bot.command(name="remove")
 async def remove(ctx, anime_id: str):
     """Remove an item from the poll list using the anime id"""
     global POLL_LIST
+
+    perms = ctx.author.guild_permissions  
+    if not perms.kick_members:
+        return
 
     try:
         anime_id_int = int(anime_id)
@@ -409,6 +418,7 @@ async def remove(ctx, anime_id: str):
         # find the first matching entry (returns None if not found)
         removed = next((e for e in POLL_LIST if e[1] == anime_id_int), None)
 
+        # no anime found for id
         if removed is None:
             await ctx.send("❌ No anime with that ID is in the poll list.")
             return
