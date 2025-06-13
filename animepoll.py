@@ -98,10 +98,12 @@ async def on_message(message):
 async def create_poll(ctx):
     """Command to manually create polls from requests"""
     if ctx.channel.id != POLLS_CHANNEL_ID:
+        await ctx.send("Wrong channel")
         return
     
     perms = ctx.author.guild_permissions  
     if not perms.kick_members:
+        await ctx.send("You have insufficient perms")
         return
 
     global EMOTES
@@ -227,6 +229,7 @@ async def view_poll(ctx):
     #lock out command to execs only
     perms = ctx.author.guild_permissions  
     if not perms.kick_members:
+        await ctx.send("You have insufficient perms")
         return
 
     #Sends empty list msg if poll list is empty
@@ -430,5 +433,38 @@ async def remove(ctx, anime_id: str):
 
     except ValueError:
         await ctx.send("❌ Invalid ID. Please enter a numeric ID.")
+
+
+@bot.command(name="setpollchannel")
+async def set_poll_channel(ctx):
+
+    global POLLS_CHANNEL_ID
+
+    perms = ctx.author.guild_permissions  
+    if not perms.administrator:
+        await ctx.send("Insufficient perms")
+        return
+    
+    POLLS_CHANNEL_ID = ctx.message.channel.id
+
+    await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
+
+@bot.command(name="setrequestchannel")
+async def set_request_channel(ctx):
+
+    global REQUESTS_CHANNEL_ID
+
+    perms = ctx.author.guild_permissions  
+    if not perms.administrator:
+        await ctx.send("Insufficient perms")
+        return
+    
+    REQUESTS_CHANNEL_ID = ctx.message.channel.id
+
+    await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
+
+@bot.command(name="viewchannels")
+async def view_channels(ctx):
+    await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
 
 bot.run(TOKEN)
