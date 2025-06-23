@@ -18,6 +18,7 @@ USER_ROLE_ID = 1014624946758098975 #weeb roll id
 
 #List of anime for polls
 POLL_LIST = []
+POLL_MESSAGES=[]
 ANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
 custom_id_counter = -1
 
@@ -96,7 +97,8 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
-    
+
+#------- MAUNAL POLL GENERATION TRIGGER
 @bot.command(name="createpoll")
 @commands.has_permissions(kick_members=True)
 async def create_poll(ctx):
@@ -105,8 +107,13 @@ async def create_poll(ctx):
         await ctx.send("Wrong channel")
         return
     
+    await create_poll_in_channel(ctx.channel)
+   
+#------- POLL GENERATOR
+async def create_poll_in_channel(channel: int):
     global EMOTES
     global POLL_LIST
+    global POLL_MESSAGES
     global custom_id_counter
 
     EMOTES = ORIGINAL_EMOTES.copy()
@@ -119,12 +126,14 @@ async def create_poll(ctx):
     for idx, anime in enumerate(POLL_LIST):
         if idx < len(EMOTES):
             emote = EMOTES[idx]
-            sent_message = await ctx.send(f"{emote} {anime[0]}")
+            sent_message = await channel.send(f"{emote} {anime[0]}")
             await sent_message.add_reaction(emote)
+            POLL_MESSAGES.append([sent_message.id, emote])
 
     #clear poll list
     POLL_LIST = []
-        
+
+
 # ---------- EMBED BUILDER ----------
 def make_anime_embed(media: dict) -> discord.Embed:
     """Builds a Discord embed from a single AniList Media dict."""
@@ -424,7 +433,7 @@ async def remove_poll_item(ctx, anime_id: str):
     except ValueError:
         await ctx.send("❌ Invalid ID. Please enter a numeric ID.")
 
-
+#------- SET CHANNEL POLLS ARE MADE IN
 @bot.command(name="setpollchannel")
 @commands.has_permissions(administrator=True)
 async def set_poll_channel(ctx):
@@ -435,6 +444,7 @@ async def set_poll_channel(ctx):
 
     await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
 
+#------- SET CHANNEL REQUESTS ARE MADE IN
 @bot.command(name="setrequestchannel")
 @commands.has_permissions(administrator=True)
 async def set_request_channel(ctx):
@@ -445,12 +455,14 @@ async def set_request_channel(ctx):
 
     await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
 
+#------- SHOWS REQUEST AND POLL CHANNELS
 @bot.command(name="viewchannels")
+@commands.has_permissions(kick_members=True)
 async def view_channels(ctx):
     """view the channels used for polls and requests"""
     await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
 
-
+#------- SETS USER PERMS FOR POLL CHANNELS
 @bot.command(name="setuserrole")
 @commands.has_permissions(administrator=True)
 async def set_user_role(ctx, *,role_name: str):
@@ -463,10 +475,152 @@ async def set_user_role(ctx, *,role_name: str):
     USER_ROLE_ID = role.id
     await ctx.send(f"✅ User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
 
+#------- PURGE CHANNEL
+async def clear_channel(ctx):
+    def not_pinned(msg):
+        return not msg.pinned
 
+    deleted = 0
+    while True:
+        purged = await ctx.channel.purge(limit=100, check=not_pinned)
+        deleted += len(purged)
+        if len(purged) < 100:
+            break
 
-# @bot.command(name="openrequests")
-# async def open_requests(ctx):
+    await ctx.send(f"✅ Cleared {deleted} messages.", delete_after=5)
+
+#------- OPENS REQUEST CHANNEL FOR REQUESTS
+@bot.command(name="openrequests")
+@commands.has_permissions(kick_members=True)
+async def open_requests(ctx, *, theme: str = ""):
+    role = ctx.guild.get_role(USER_ROLE_ID)
+    request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
+    poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+
+    if role is None:
+        await ctx.send("❌ Role not found.")
+        return
+    if request_channel is None or poll_channel is None:
+        await ctx.send("❌ One or more channels not found.")
+        return
+
+    await ctx.send(f"Opening Requests...")
+
+    await request_channel.purge(limit=None)
+    await poll_channel.purge(limit=None)
+
+    channel_name = f"🎬丨「requests」{theme}"
+
+    try:
+        await request_channel.edit(name=channel_name)
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to rename that channel.")
+    except discord.HTTPException as e:
+        await ctx.send(f"❌ Failed to rename the channel: {e}")
+
+    try:
+        await request_channel.set_permissions(role, view_channel=True)
+        await poll_channel.set_permissions(role, view_channel=False)
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to change channel permissions.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to set channel permissions: {e}")
+
+    await ctx.send(f"Requests are now open", delete_after=5)
+    
+#------- OPENS POLL CHANNEL AND MAKES POLL
+@bot.command(name="openpolls")
+@commands.has_permissions(kick_members=True)
+async def open_polls(ctx):
+    role = ctx.guild.get_role(USER_ROLE_ID)
+    request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
+    poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+
+    if role is None:
+        await ctx.send("❌ Role not found.")
+        return
+    if request_channel is None or poll_channel is None:
+        await ctx.send("❌ One or more channels not found.")
+        return
+
+    
+    try:
+        await request_channel.set_permissions(role, view_channel=False)
+        await poll_channel.set_permissions(role, view_channel=True)
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to change channel permissions.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to set channel permissions: {e}")
+
+    await create_poll_in_channel(poll_channel)
+    await ctx.send("Polls are now open!")
+
+#------- CLOSES POLL CHANNEL AND POSTS RESULTS
+@bot.command(name="closepolls")
+@commands.has_permissions(kick_members=True)
+async def close_polls(ctx):
+    global POLL_MESSAGES
+    role = ctx.guild.get_role(USER_ROLE_ID)
+    request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
+    poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+
+    first = [["dummy", 0]]
+    second = [["dummy2", 0]]
+
+    channel = ctx.channel
+
+    for message_id, emote in POLL_MESSAGES:
+        try:
+            message = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            continue  # Skip if message was deleted
+
+        for reaction in message.reactions:
+            if str(reaction.emoji) == emote:
+                count = reaction.count
+                title_only = message.content.split(' ', 1)[1] if ' ' in message.content else message.content
+                if reaction.me:
+                    count -= 1
+
+                media = search_anime(title_only)
+                if isinstance(media, list) and media:
+                    media = media[0]
+
+                cover = media.get("coverImage", {}).get("large")
+
+                if count > first[0][1]:
+                    second = first
+                    first = [[title_only, count, cover]]
+                elif count == first[0][1]:
+                    first.append([title_only, count, cover])
+                elif count > second[0][1]:
+                    second = [[title_only, count, cover]]
+                elif count == second[0][1]:
+                    second.append([title_only, count, cover])
+
+    # Output results
+    result_msg = "**Poll Results**\n\n**Top Votes:**\n"
+    for entry in first:
+        if entry[0] != "dummy":
+            result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
+
+    if(len(first)==1):
+        result_msg += "\n**Second Place:**\n"
+        for entry in second:
+            if entry[0] != "dummy2":
+                result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
+
+    await ctx.send(result_msg)
+    POLL_MESSAGES = []
+    try:
+        await request_channel.set_permissions(role, view_channel=False)
+        await poll_channel.set_permissions(role, view_channel=True)
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to change channel permissions.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to set channel permissions: {e}")
+                
+                
 
 
 bot.run(TOKEN)
