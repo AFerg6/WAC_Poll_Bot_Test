@@ -1,5 +1,0 @@
-[settings]
-python_compile = true
-
-[tools]
-python = "3.10"

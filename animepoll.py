@@ -1,5 +1,7 @@
 import discord, requests
 from discord.ext import commands, tasks
+from config import TOKEN
+
 
 intents = discord.Intents.default()
 intents.members = True  # SERVER MEMBERS INTENT
@@ -8,10 +10,11 @@ intents.message_content = True
 
 
 
-TOKEN = 'MTM4MjA1OTY3NDI0OTA2ODU1NQ.GG6bGK.27R4DniYshwNJtFI3jBo7Jk7Y2jQGyL6VWz9Qg'
+
 GUILD_ID = 1382059395545960521  # Your server's ID
 REQUESTS_CHANNEL_ID = 1382060973355171890  # The requests channel ID
 POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
+USER_ROLE_ID = 1014624946758098975 #weeb roll id
 
 #List of anime for polls
 POLL_LIST = []
@@ -95,17 +98,13 @@ async def on_message(message):
     await bot.process_commands(message)
     
 @bot.command(name="createpoll")
+@commands.has_permissions(kick_members=True)
 async def create_poll(ctx):
     """Command to manually create polls from requests"""
     if ctx.channel.id != POLLS_CHANNEL_ID:
         await ctx.send("Wrong channel")
         return
     
-    perms = ctx.author.guild_permissions  
-    if not perms.kick_members:
-        await ctx.send("You have insufficient perms")
-        return
-
     global EMOTES
     global POLL_LIST
     global custom_id_counter
@@ -223,15 +222,9 @@ query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
 
 # ---------- Poll Viewer ----------
 @bot.command(name="viewpoll")
+@commands.has_permissions(kick_members=True)
 async def view_poll(ctx):
     """View all items in the poll List"""
-
-    #lock out command to execs only
-    perms = ctx.author.guild_permissions  
-    if not perms.kick_members:
-        await ctx.send("You have insufficient perms")
-        return
-
     #Sends empty list msg if poll list is empty
     if POLL_LIST == []:
         await ctx.send("The poll list is empty")
@@ -407,13 +400,10 @@ def next_negative_id() -> int:
 
 #-------- REMOVE ITEM FROM POLL --------
 @bot.command(name="remove")
-async def remove(ctx, anime_id: str):
+@commands.has_permissions(kick_members=True)
+async def remove_poll_item(ctx, anime_id: str):
     """Remove an item from the poll list using the anime id"""
     global POLL_LIST
-
-    perms = ctx.author.guild_permissions  
-    if not perms.kick_members:
-        return
 
     try:
         anime_id_int = int(anime_id)
@@ -436,35 +426,47 @@ async def remove(ctx, anime_id: str):
 
 
 @bot.command(name="setpollchannel")
+@commands.has_permissions(administrator=True)
 async def set_poll_channel(ctx):
 
     global POLLS_CHANNEL_ID
-
-    perms = ctx.author.guild_permissions  
-    if not perms.administrator:
-        await ctx.send("Insufficient perms")
-        return
     
     POLLS_CHANNEL_ID = ctx.message.channel.id
 
     await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
 
 @bot.command(name="setrequestchannel")
+@commands.has_permissions(administrator=True)
 async def set_request_channel(ctx):
 
     global REQUESTS_CHANNEL_ID
 
-    perms = ctx.author.guild_permissions  
-    if not perms.administrator:
-        await ctx.send("Insufficient perms")
-        return
-    
     REQUESTS_CHANNEL_ID = ctx.message.channel.id
 
     await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
 
 @bot.command(name="viewchannels")
 async def view_channels(ctx):
+    """view the channels used for polls and requests"""
     await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
+
+
+@bot.command(name="setuserrole")
+@commands.has_permissions(administrator=True)
+async def set_user_role(ctx, *,role_name: str):
+    global USER_ROLE_ID
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if role is None:
+        await ctx.send(f"❌ Role `{role_name}` not found.")
+        return
+
+    USER_ROLE_ID = role.id
+    await ctx.send(f"✅ User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
+
+
+
+# @bot.command(name="openrequests")
+# async def open_requests(ctx):
+
 
 bot.run(TOKEN)
