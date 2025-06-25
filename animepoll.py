@@ -8,18 +8,16 @@ intents.members = True  # SERVER MEMBERS INTENT
 intents.presences = True  # PRESENCE INTENT
 intents.message_content = True
 
+#sql databse objects
 conn = sqlite3.connect('botdata.db')
 cursor = conn.cursor()
 
-
-GUILD_ID = 1382059395545960521  # Your server's ID
+#set channel and user ids
 REQUESTS_CHANNEL_ID = 1382060973355171890  # The requests channel ID
 POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
 USER_ROLE_ID = 1014624946758098975 #weeb roll id
 
-#List of anime for polls
-POLL_LIST = []
-POLL_MESSAGES=[]
+#poll support variables
 ANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
 custom_id_counter = -1
 
@@ -87,8 +85,7 @@ ORIGINAL_EMOTES = [
     "<a:animechair:1016745198828650517>",
 ]
 
-EMOTES = ORIGINAL_EMOTES.copy()
-
+#make poll item table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS poll_items (
     anime_id INTEGER PRIMARY KEY,
@@ -99,6 +96,7 @@ CREATE TABLE IF NOT EXISTS poll_items (
 );
 ''')
 
+#make emote table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS reaction_emotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,17 +104,41 @@ CREATE TABLE IF NOT EXISTS reaction_emotes (
 )
 ''')
 
+#make settings table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS settings (
+               setting TEXT UNIQUE,
+               value
+)
+''')
+
+#if emote table is empty fill it with predefined list
 cursor.execute("SELECT COUNT(*) FROM reaction_emotes")
 count = cursor.fetchone()[0]
-
 if count==0:
+    print("generating new emote table")
     for emote in ORIGINAL_EMOTES:
         cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
     conn.commit()
     print("initial emotes loaded to db")
 
+#if settings is empty fill with predefined settings
+cursor.execute("SELECT COUNT(*) FROM settings")
+count = cursor.fetchone()[0]
+if count == 0:
+    print("generating default settings")
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("REQUESTS_CHANNEL_ID", 1382060973355171890))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("POLLS_CHANNEL_ID", 1382061036244570182))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("USER_ROLE_ID", 1014624946758098975))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("custom_id_counter", -1))
+else:
+    cursor.execute("SELECT setting, value FROM settings")
+    settings_list = dict(cursor.fetchall())
 
-
+    REQUESTS_CHANNEL_ID = int(settings_list["REQUESTS_CHANNEL_ID"])
+    POLLS_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
+    USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
+    custom_id_counter = int(settings_list["custom_id_counter"])
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -143,19 +165,22 @@ async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = ""):
         if ctx:
             await ctx.send(f"**{title}** is already in the poll list.")
 
+#------- ADD EMOTE TO DB
 def add_emote_item(emote: str):
     cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
     conn.commit()
-    
+
+#------- REMOVE EMOTE FROM DB  
 def remove_emote_item(emote: str):
     cursor.execute("DELETE FROM reaction_emotes WHERE emote_text = ?", (emote,))
     conn.commit()
-
+#------- FRETRIEVE EMOTES FROM DB
 def get_emote_items():
     cursor.execute("SELECT emote_text FROM reaction_emotes ORDER BY id ASC")
     emotes = [row[0] for row in cursor.fetchall()]
     return emotes
 
+#------- REMOVE ANIME FROM POLL DB
 def remove_poll_item_from_db(anime_id: int):
     cursor.execute("SELECT title FROM poll_items WHERE anime_id = ?", (anime_id,))
     result = cursor.fetchone()
@@ -173,6 +198,8 @@ def remove_poll_item_from_db(anime_id: int):
 @commands.has_permissions(kick_members=True)
 async def create_poll(ctx):
     """Command to manually create polls from requests"""
+
+    #only works in set poll channel
     if ctx.channel.id != POLLS_CHANNEL_ID:
         await ctx.send("Wrong channel")
         return
@@ -183,12 +210,20 @@ async def create_poll(ctx):
 async def create_poll_in_channel(channel: int):
     global custom_id_counter
 
+    #get items used in the poll
     cursor.execute("SELECT title FROM poll_items")
     poll_list = cursor.fetchall()
     titles = [row[0] for row in poll_list]
 
+    #grab emojis 
     emotes = get_emote_items()
+    
+    #reset custom id counter
     custom_id_counter = -1
+    cursor.execute("""UPDATE settings SET value = ? WHERE setting = ? """, (custom_id_counter, "custom_id_counter"))
+    conn.commit()
+
+    #clear local emnbed cache to free up space
     ANIME_CACHE.clear()
     
     # Create polls using the extracted anime names
@@ -203,13 +238,11 @@ async def create_poll_in_channel(channel: int):
         WHERE title = ?
     """, (emote, sent_message.id, title))
             conn.commit()
-    # #clear poll list
-    # cursor.execute("DELETE FROM poll_items")
-    # conn.commit()
 
 # ---------- EMBED BUILDER ----------
 def make_anime_embed(media: dict) -> discord.Embed:
     """Builds a Discord embed from a single AniList Media dict."""
+    #im not going to even pretend i know what happening here
     title = (
         media.get("title", {}).get("english")
         or media.get("title", {}).get("romaji")
@@ -257,6 +290,7 @@ def make_anime_embed(media: dict) -> discord.Embed:
 
 # ---------- ANILSIT SEARCH  ----------
 def search_anime(title: str):
+    #actual witchcraft
     """Search AniList for <title>, return an Embed for the most-popular match (or an error string)."""
     url = "https://graphql.anilist.co"
     query = '''
@@ -303,7 +337,9 @@ query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
     return media
 
 #---------- ANILIST SEARCH BY ID
+#unused but left for potential future use
 def search_anime_by_id(anime_id: int):
+    #witchcraft p2
     """Search AniList by ID, return a single Media dict or an error string."""
     url = "https://graphql.anilist.co"
     query = '''
@@ -373,6 +409,7 @@ async def anime(ctx, *, anime_name: str):
 
     result = search_anime(anime_name)
 
+    #if no result found prompt for a custom title
     if isinstance(result, str):
         await ctx.send(f"No results found for **{anime_name}**.")
         await ctx.send("React with ✅ within 30 seconds to add it manually to the poll list.")
@@ -393,9 +430,12 @@ async def anime(ctx, *, anime_name: str):
             await ctx.send("⏳ Timed out. Custom entry not added.")
             return
 
+        #add anime with custom title and new id num to db
         custom_title = anime_name.strip()
         await add_poll_item(ctx, custom_title, custom_id_counter)
         custom_id_counter -= 1
+        cursor.execute("""UPDATE settings SET value = ? WHERE setting = ? """, (custom_id_counter, "custom_id_counter"))
+        conn.commit()
         return
 
     # Build embed with top results
@@ -427,11 +467,6 @@ async def anime(ctx, *, anime_name: str):
         title = anime["title"].get("english") or anime["title"].get("romaji") or "Unknown"
         line2.append(f"{nums[i]}  {title}")
     line2_str = "     ".join(line2) if line2 else ""
-
-    # Combine with vertical spacing between lines
-    formatted_display = f"{line1_str}\n\n{line2_str}" if line2_str else line1_str
-
-
 
     # Combine lines with a newline
     field_value = line1_str
@@ -503,16 +538,6 @@ async def on_reaction_add(reaction, user):
         cover_url = chosen.get("coverImage", {}).get("large") or chosen.get("coverImage", {}).get("medium") or None
         # cursor.execute("INSERT INTO poll_items (anime_id, title, cover_url) VALUES (?, ?, ?)", (anime_id, title_en, cover_url))
         await add_poll_item(reaction.message.channel, title_en, anime_id, cover_url)
-        # duplicate check
-        # if any(entry[1] == anime_id for entry in POLL_LIST):
-        #     await reaction.message.channel.send(
-        #         f" **{title_en}** is already in the poll list."
-        #     )
-        # else:
-        #     POLL_LIST.append([title_en, anime_id])
-        #     await reaction.message.channel.send(
-        #         f"Added **{title_en}** to the poll list!"
-        #     )
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
     else:
@@ -528,7 +553,11 @@ async def on_reaction_add(reaction, user):
 #-------- CUSTOM ID GENERATION HANDLER -------
 def next_negative_id() -> int:
     """Return the next available negative ID (-1, -2, …) not yet used."""
-    used = {entry[1] for entry in POLL_LIST if isinstance(entry[1], int) and entry[1] < 0}
+    cursor.execute("SELECT anime_id FROM poll_items")
+    poll_list = cursor.fetchall()
+
+    #uses the first avalible custom id number
+    used = {entry[0] for entry in poll_list if isinstance(entry[0], int) and entry[0] < 0}
     n = -1
     while n in used:
         n -= 1
@@ -540,16 +569,20 @@ def next_negative_id() -> int:
 async def remove_poll_item(ctx, anime_id: str):
     """Remove an item from the poll list using the anime id"""
     try:
+        #convert input to int
         anime_id_int = int(anime_id)
 
+        #remove item and get name
         anime_name = remove_poll_item_from_db(anime_id_int)
 
+        #anime not in db
         if(anime_name == None):
             await ctx.send("No anime with that ID is in the poll list.")
             return
 
         await ctx.send(f"**{anime_name}** has been removed from the poll list.")
 
+    #id num not given
     except ValueError:
         await ctx.send("Invalid ID. Please enter a numeric ID.")        
 
@@ -561,7 +594,12 @@ async def set_poll_channel(ctx):
     global POLLS_CHANNEL_ID
     
     POLLS_CHANNEL_ID = ctx.message.channel.id
-
+    cursor.execute("""
+        UPDATE settings
+        SET value = ?
+        WHERE setting = ?
+    """, (POLLS_CHANNEL_ID, "POLLS_CHANNEL_ID"))
+    conn.commit()
     await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
 
 #------- SET CHANNEL REQUESTS ARE MADE IN
@@ -572,7 +610,12 @@ async def set_request_channel(ctx):
     global REQUESTS_CHANNEL_ID
 
     REQUESTS_CHANNEL_ID = ctx.message.channel.id
-
+    cursor.execute("""
+        UPDATE settings
+        SET value = ?
+        WHERE setting = ?
+    """, (REQUESTS_CHANNEL_ID, "REQUESTS_CHANNEL_ID"))
+    conn.commit()
     await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
 
 #------- SHOWS REQUEST AND POLL CHANNELS
@@ -597,6 +640,12 @@ async def set_user_role(ctx, *,role_name: str):
     #if found store id
     USER_ROLE_ID = role.id
     await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
+    cursor.execute("""
+        UPDATE settings
+        SET value = ?
+        WHERE setting = ?
+    """, (USER_ROLE_ID, "USER_ROLE_ID"))
+    conn.commit()
 
 #------- PURGE CHANNEL
 async def clear_channel(ctx):
@@ -693,17 +742,29 @@ async def open_polls(ctx):
 @commands.has_permissions(kick_members=True)
 async def close_polls(ctx):
     """Closes poll channel to users and outputs winners"""
-    global POLL_MESSAGES
     role = ctx.guild.get_role(USER_ROLE_ID)
     request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
     poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
 
+    await ctx.send("Closing polls...")
+
+    #get all poll items
     cursor.execute("SELECT title, cover_url, message_id, emote_text FROM poll_items")
     poll_list = cursor.fetchall()
 
+
+    #tries to hide both channels
+    try:
+        await request_channel.set_permissions(role, view_channel=False)
+        await poll_channel.set_permissions(role, view_channel=False)
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to change channel permissions.")
+    except Exception as e:
+        await ctx.send(f"Failed to set channel permissions: {e}")
+
     #dummy winners for easy initial comparison
-    first = [["dummy", 0]]
-    second = [["dummy2", 0]]
+    first = [["dummy", 0, ""]]
+    second = [["dummy2", 0, ""]]
 
     channel = ctx.channel
 
@@ -747,19 +808,12 @@ async def close_polls(ctx):
                 result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
 
     #announce winners
-    await ctx.send(result_msg)
+    await ctx.send(result_msg) 
 
-    #clears stored poll messages
-    POLL_MESSAGES = []
+    #clear poll list
+    cursor.execute("DELETE FROM poll_items")
+    conn.commit()
 
-    #tries to hide both channels
-    try:
-        await request_channel.set_permissions(role, view_channel=False)
-        await poll_channel.set_permissions(role, view_channel=False)
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to change channel permissions.")
-    except Exception as e:
-        await ctx.send(f"Failed to set channel permissions: {e}")
                 
 #------- VIEW EMOTE LIST
 @bot.command(name="viewemotes")
@@ -802,6 +856,7 @@ async def validate_emote(ctx, emote: str):
 async def add_emote(ctx, emote: str):
     """Add an emote to the list of emotes used for poll reactions"""
 
+    #if emote valid add to db
     if await validate_emote(ctx, emote):
         try:
             add_emote_item(emote)
