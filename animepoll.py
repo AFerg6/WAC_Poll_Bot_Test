@@ -94,8 +94,8 @@ CREATE TABLE IF NOT EXISTS poll_items (
     anime_id INTEGER PRIMARY KEY,
     title TEXT NOT NULL UNIQUE,
     cover_url TEXT,
-    votes INTEGER DEFAULT 0,
-    message_id INTEGER
+    message_id INTEGER,
+    emote_text TEXT
 );
 ''')
 
@@ -110,7 +110,7 @@ cursor.execute("SELECT COUNT(*) FROM reaction_emotes")
 count = cursor.fetchone()[0]
 
 if count==0:
-    for emote in EMOTES:
+    for emote in ORIGINAL_EMOTES:
         cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
     conn.commit()
     print("initial emotes loaded to db")
@@ -129,18 +129,44 @@ async def on_message(message):
     await bot.process_commands(message)
 
 #------- ADD ITEM TO POLL DB
-def add_poll_item(title: str, anime_id: int, cover_url: str=""):
-    cursor.execute(
-        "INSERT INTO poll_items (anime_id, title_en, cover_url) VALUES (?, ?, ?)",
-        (anime_id, title, cover_url)
-    )
-    conn.commit()
+async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = ""):
+    try:
+        cursor.execute(
+            "INSERT INTO poll_items (anime_id, title, cover_url) VALUES (?, ?, ?)",
+            (anime_id, title, cover_url)
+        )
+        conn.commit()
 
+        if ctx:
+            await ctx.send(f"Added **{title}** to the poll list.")
+    except sqlite3.IntegrityError:
+        if ctx:
+            await ctx.send(f"**{title}** is already in the poll list.")
 
 def add_emote_item(emote: str):
     cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
     conn.commit()
+    
+def remove_emote_item(emote: str):
+    cursor.execute("DELETE FROM reaction_emotes WHERE emote_text = ?", (emote,))
+    conn.commit()
 
+def get_emote_items():
+    cursor.execute("SELECT emote_text FROM reaction_emotes ORDER BY id ASC")
+    emotes = [row[0] for row in cursor.fetchall()]
+    return emotes
+
+def remove_poll_item_from_db(anime_id: int):
+    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ?", (anime_id,))
+    result = cursor.fetchone()
+
+    if result is None:
+        return None  # No match found
+
+    anime_name = result[0]
+    cursor.execute("DELETE FROM poll_items WHERE anime_id = ?", (anime_id,))
+    conn.commit()
+    return anime_name
 
 #------- MAUNAL POLL GENERATION TRIGGER
 @bot.command(name="createpoll")
@@ -155,27 +181,31 @@ async def create_poll(ctx):
    
 #------- POLL GENERATOR
 async def create_poll_in_channel(channel: int):
-    global EMOTES
-    global POLL_LIST
-    global POLL_MESSAGES
     global custom_id_counter
 
-    EMOTES = ORIGINAL_EMOTES.copy()
-    #sorts list alphabetically, resets custom id counter and clears message cache
-    POLL_LIST.sort(key=lambda x: x[0].lower())
+    cursor.execute("SELECT title FROM poll_items")
+    poll_list = cursor.fetchall()
+    titles = [row[0] for row in poll_list]
+
+    emotes = get_emote_items()
     custom_id_counter = -1
     ANIME_CACHE.clear()
     
     # Create polls using the extracted anime names
-    for idx, anime in enumerate(POLL_LIST):
-        if idx < len(EMOTES):
-            emote = EMOTES[idx]
-            sent_message = await channel.send(f"{emote} {anime[0]}")
+    for idx, title in enumerate(titles):
+        if idx < len(emotes):
+            emote = emotes[idx]
+            sent_message = await channel.send(f"{emote} {title}")
             await sent_message.add_reaction(emote)
-            POLL_MESSAGES.append([sent_message.id, emote])
-
-    #clear poll list
-    POLL_LIST = []
+            cursor.execute("""
+        UPDATE poll_items
+        SET emote_text = ?, message_id = ?
+        WHERE title = ?
+    """, (emote, sent_message.id, title))
+            conn.commit()
+    # #clear poll list
+    # cursor.execute("DELETE FROM poll_items")
+    # conn.commit()
 
 # ---------- EMBED BUILDER ----------
 def make_anime_embed(media: dict) -> discord.Embed:
@@ -317,20 +347,23 @@ query ($id: Int) {
 
     return media
     
-
 # ---------- Poll Viewer ----------
 @bot.command(name="viewpoll")
 @commands.has_permissions(kick_members=True)
 async def view_poll(ctx):
     """View all items in the poll List"""
     #Sends empty list msg if poll list is empty
-    if POLL_LIST == []:
+
+    #get all poll items
+    cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")
+    poll_list = cursor.fetchall()
+
+    if poll_list == []:
         await ctx.send("The poll list is empty")
 
     #prints all items in poll sorted alphabetically
-    for anime in POLL_LIST:
-        POLL_LIST.sort(key=lambda x: x[0].lower())
-        await ctx.send(f"{anime[0]} ({anime[1]})")
+    for title, anime_id in poll_list:
+        await ctx.send(f"{title} ({anime_id})")
 
 #------ ANIME SEARCH
 @bot.command(name="anime")
@@ -361,10 +394,7 @@ async def anime(ctx, *, anime_name: str):
             return
 
         custom_title = anime_name.strip()
-        add_poll_item(custom_title,custom_id_counter)
-        # cursor.execute("INSERT INTO poll_items (anime_id, title, cover_url) VALUES (?, ?, ?)", ())
-        # POLL_LIST.append([custom_title, custom_id_counter])
-        await ctx.send(f"✅ Added custom anime **{custom_title}** to the poll list.")
+        await add_poll_item(ctx, custom_title, custom_id_counter)
         custom_id_counter -= 1
         return
 
@@ -472,19 +502,19 @@ async def on_reaction_add(reaction, user):
     if reaction.message.channel.id == REQUESTS_CHANNEL_ID: 
         cover_url = chosen.get("coverImage", {}).get("large") or chosen.get("coverImage", {}).get("medium") or None
         # cursor.execute("INSERT INTO poll_items (anime_id, title, cover_url) VALUES (?, ?, ?)", (anime_id, title_en, cover_url))
-        add_poll_item(anime_id, title_en, cover_url)
+        await add_poll_item(reaction.message.channel, title_en, anime_id, cover_url)
         # duplicate check
-        if any(entry[1] == anime_id for entry in POLL_LIST):
-            await reaction.message.channel.send(
-                f" **{title_en}** is already in the poll list."
-            )
-        else:
-            POLL_LIST.append([title_en, anime_id])
-            await reaction.message.channel.send(
-                f"Added **{title_en}** to the poll list!"
-            )
-            embed = make_anime_embed(chosen)
-            await reaction.message.channel.send(embed=embed)
+        # if any(entry[1] == anime_id for entry in POLL_LIST):
+        #     await reaction.message.channel.send(
+        #         f" **{title_en}** is already in the poll list."
+        #     )
+        # else:
+        #     POLL_LIST.append([title_en, anime_id])
+        #     await reaction.message.channel.send(
+        #         f"Added **{title_en}** to the poll list!"
+        #     )
+        embed = make_anime_embed(chosen)
+        await reaction.message.channel.send(embed=embed)
     else:
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
@@ -509,26 +539,19 @@ def next_negative_id() -> int:
 @commands.has_permissions(kick_members=True)
 async def remove_poll_item(ctx, anime_id: str):
     """Remove an item from the poll list using the anime id"""
-    global POLL_LIST
-
     try:
         anime_id_int = int(anime_id)
 
-        # find the first matching entry (returns None if not found)
-        removed = next((e for e in POLL_LIST if e[1] == anime_id_int), None)
+        anime_name = remove_poll_item_from_db(anime_id_int)
 
-        # no anime found for id
-        if removed is None:
-            await ctx.send("❌ No anime with that ID is in the poll list.")
+        if(anime_name == None):
+            await ctx.send("No anime with that ID is in the poll list.")
             return
 
-        # rebuild list without the removed entry
-        POLL_LIST = [e for e in POLL_LIST if e[1] != anime_id_int]
-
-        await ctx.send(f"✅ **{removed[0]}** has been removed from the poll list.")
+        await ctx.send(f"**{anime_name}** has been removed from the poll list.")
 
     except ValueError:
-        await ctx.send("❌ Invalid ID. Please enter a numeric ID.")
+        await ctx.send("Invalid ID. Please enter a numeric ID.")        
 
 #------- SET CHANNEL POLLS ARE MADE IN
 @bot.command(name="setpollchannel")
@@ -675,6 +698,9 @@ async def close_polls(ctx):
     request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
     poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
 
+    cursor.execute("SELECT title, cover_url, message_id, emote_text FROM poll_items")
+    poll_list = cursor.fetchall()
+
     #dummy winners for easy initial comparison
     first = [["dummy", 0]]
     second = [["dummy2", 0]]
@@ -682,7 +708,7 @@ async def close_polls(ctx):
     channel = ctx.channel
 
     #iterates through all items in poll_messages
-    for message_id, emote in POLL_MESSAGES:
+    for title, cover_url, message_id, emote in poll_list:
         try:
             message = await channel.fetch_message(message_id)
         except discord.NotFound:
@@ -693,30 +719,20 @@ async def close_polls(ctx):
             #checks for initially used emoji to filter fake votes
             if str(reaction.emoji) == emote:
                 count = reaction.count
-                #cuts out emoji for winner text
-                title_only = message.content.split(' ', 1)[1] if ' ' in message.content else message.content
-                
                 #removes bot "vote"
                 if reaction.me:
                     count -= 1
 
-                #searches for cover image
-                media = search_anime(title_only)
-                if isinstance(media, list) and media:
-                    media = media[0]
-
-                cover = media.get("coverImage", {}).get("large")
-
                 #winner logic
                 if count > first[0][1]:
                     second = first
-                    first = [[title_only, count, cover]]
+                    first = [[title, count, cover_url]]
                 elif count == first[0][1]:
-                    first.append([title_only, count, cover])
+                    first.append([title, count, cover_url])
                 elif count > second[0][1]:
-                    second = [[title_only, count, cover]]
+                    second = [[title, count, cover_url]]
                 elif count == second[0][1]:
-                    second.append([title_only, count, cover])
+                    second.append([title, count, cover_url])
 
     # Output results
     result_msg = "**Poll Results**\n\n**Top Votes:**\n"
@@ -750,8 +766,7 @@ async def close_polls(ctx):
 @commands.has_permissions(kick_members=True)
 async def view_emotes(ctx):
     """shows the list of emotes used for the polls"""
-    cursor.execute("SELECT emote_text FROM reaction_emotes ORDER BY id ASC")
-    emotes = [row[0] for row in cursor.fetchall()]
+    emotes = get_emote_items()
 
     # Send emotes in groups of 10 per message
     chunk_size = 10
@@ -800,11 +815,12 @@ async def add_emote(ctx, emote: str):
 async def remove_emote(ctx, emote: str):
     """Remove an emote from the list of emotes used for poll reactions"""
 
-    add_emote_item(emote)
-    if cursor.rowcount > 0:
+    try:
+        remove_emote_item(emote)
         await ctx.send(f"Emoji {emote} removed from the database.")
-    else:
+    except Exception as e:
         await ctx.send(f"Emoji {emote} not found in the database.")
 
+        
 
 bot.run(TOKEN)
