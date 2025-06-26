@@ -119,7 +119,6 @@ if count==0:
     print("generating new emote table")
     for emote in ORIGINAL_EMOTES:
         cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
-    conn.commit()
     print("initial emotes loaded to db")
 
 #if settings is empty fill with predefined settings
@@ -139,6 +138,10 @@ else:
     POLLS_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
     USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
     custom_id_counter = int(settings_list["custom_id_counter"])
+
+#update table with writen data
+conn.commit()
+
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
