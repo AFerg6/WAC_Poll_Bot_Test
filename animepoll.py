@@ -133,7 +133,7 @@ if count == 0:
 else:
     cursor.execute("SELECT setting, value FROM settings")
     settings_list = dict(cursor.fetchall())
-
+    print("fetching settings")
     REQUESTS_CHANNEL_ID = int(settings_list["REQUESTS_CHANNEL_ID"])
     POLLS_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
     USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
@@ -196,19 +196,6 @@ def remove_poll_item_from_db(anime_id: int):
     conn.commit()
     return anime_name
 
-#------- MAUNAL POLL GENERATION TRIGGER
-@bot.command(name="createpoll")
-@commands.has_permissions(kick_members=True)
-async def create_poll(ctx):
-    """Command to manually create polls from requests"""
-
-    #only works in set poll channel
-    if ctx.channel.id != POLLS_CHANNEL_ID:
-        await ctx.send("Wrong channel")
-        return
-    
-    await create_poll_in_channel(ctx.channel)
-   
 #------- POLL GENERATOR
 async def create_poll_in_channel(channel: int):
     global custom_id_counter
@@ -386,26 +373,8 @@ query ($id: Int) {
 
     return media
     
-# ---------- Poll Viewer ----------
-@bot.command(name="viewpoll")
-@commands.has_permissions(kick_members=True)
-async def view_poll(ctx):
-    """View all items in the poll List"""
-    #Sends empty list msg if poll list is empty
-
-    #get all poll items
-    cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")
-    poll_list = cursor.fetchall()
-
-    if poll_list == []:
-        await ctx.send("The poll list is empty")
-
-    #prints all items in poll sorted alphabetically
-    for title, anime_id in poll_list:
-        await ctx.send(f"{title} ({anime_id})")
-
 #------ ANIME SEARCH
-@bot.command(name="anime")
+@bot.command(name="anime", brief="Find and anime")
 async def anime(ctx, *, anime_name: str):
     """Searches for an anime from anilist and shows the top 5. If in the set request channe adds to the poll list otherwise shows anime details"""
     global custom_id_counter
@@ -566,90 +535,6 @@ def next_negative_id() -> int:
         n -= 1
     return n
 
-#-------- REMOVE ITEM FROM POLL --------
-@bot.command(name="remove")
-@commands.has_permissions(kick_members=True)
-async def remove_poll_item(ctx, anime_id: str):
-    """Remove an item from the poll list using the anime id"""
-    try:
-        #convert input to int
-        anime_id_int = int(anime_id)
-
-        #remove item and get name
-        anime_name = remove_poll_item_from_db(anime_id_int)
-
-        #anime not in db
-        if(anime_name == None):
-            await ctx.send("No anime with that ID is in the poll list.")
-            return
-
-        await ctx.send(f"**{anime_name}** has been removed from the poll list.")
-
-    #id num not given
-    except ValueError:
-        await ctx.send("Invalid ID. Please enter a numeric ID.")        
-
-#------- SET CHANNEL POLLS ARE MADE IN
-@bot.command(name="setpollchannel")
-@commands.has_permissions(administrator=True)
-async def set_poll_channel(ctx):
-    """sets channel opened for polls"""
-    global POLLS_CHANNEL_ID
-    
-    POLLS_CHANNEL_ID = ctx.message.channel.id
-    cursor.execute("""
-        UPDATE settings
-        SET value = ?
-        WHERE setting = ?
-    """, (POLLS_CHANNEL_ID, "POLLS_CHANNEL_ID"))
-    conn.commit()
-    await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
-
-#------- SET CHANNEL REQUESTS ARE MADE IN
-@bot.command(name="setrequestchannel")
-@commands.has_permissions(administrator=True)
-async def set_request_channel(ctx):
-    """sets channel opened for requests"""
-    global REQUESTS_CHANNEL_ID
-
-    REQUESTS_CHANNEL_ID = ctx.message.channel.id
-    cursor.execute("""
-        UPDATE settings
-        SET value = ?
-        WHERE setting = ?
-    """, (REQUESTS_CHANNEL_ID, "REQUESTS_CHANNEL_ID"))
-    conn.commit()
-    await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
-
-#------- SHOWS REQUEST AND POLL CHANNELS
-@bot.command(name="viewchannels")
-@commands.has_permissions(kick_members=True)
-async def view_channels(ctx):
-    """view the channels used for polls and requests"""
-    await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
-
-#------- SETS USER PERMS FOR POLL CHANNELS
-@bot.command(name="setuserrole")
-@commands.has_permissions(administrator=True)
-async def set_user_role(ctx, *,role_name: str):
-    """sets user role that is modified for poll opening/closing"""
-    global USER_ROLE_ID
-    #searches for role from given input
-    role = discord.utils.get(ctx.guild.roles, name=role_name)
-    if role is None:
-        await ctx.send(f"Role `{role_name}` not found.")
-        return
-
-    #if found store id
-    USER_ROLE_ID = role.id
-    await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
-    cursor.execute("""
-        UPDATE settings
-        SET value = ?
-        WHERE setting = ?
-    """, (USER_ROLE_ID, "USER_ROLE_ID"))
-    conn.commit()
-
 #------- PURGE CHANNEL
 async def clear_channel(ctx):
     #checks if msg is pinned
@@ -665,171 +550,6 @@ async def clear_channel(ctx):
             break
 
     await ctx.send(f"Cleared {deleted} messages.", delete_after=5)
-
-#------- OPENS REQUEST CHANNEL FOR REQUESTS
-@bot.command(name="openrequests")
-@commands.has_permissions(kick_members=True)
-async def open_requests(ctx, *, theme: str = ""):
-    """clears poll and request channels, opens request channel and renames to current theme"""
-    role = ctx.guild.get_role(USER_ROLE_ID)
-    request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
-    poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
-
-#checks for set role and request channel
-    if role is None:
-        await ctx.send("Role not found.")
-        return
-    if request_channel is None or poll_channel is None:
-        await ctx.send("One or more channels not found.")
-        return
-
-    await ctx.send(f"Opening Requests...")
-
-    #purge both channels
-    await request_channel.purge(limit=None)
-    await poll_channel.purge(limit=None)
-
-    #set channel name to current theme
-    channel_name = f"🎬丨「requests」{theme}"
-
-    #tries to change name and perms
-    try:
-        await request_channel.edit(name=channel_name)
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to rename that channel.")
-    except discord.HTTPException as e:
-        await ctx.send(f"Failed to rename the channel: {e}")
-
-    try:
-        await request_channel.set_permissions(role, view_channel=True)
-        await poll_channel.set_permissions(role, view_channel=False)
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to change channel permissions.")
-    except Exception as e:
-        await ctx.send(f"Failed to set channel permissions: {e}")
-
-    await ctx.send(f"Requests are now open", delete_after=5)
-    
-#------- OPENS POLL CHANNEL AND MAKES POLL
-@bot.command(name="openpolls")
-@commands.has_permissions(kick_members=True)
-async def open_polls(ctx):
-    """Opens poll channel, closes requests and creates poll"""
-    role = ctx.guild.get_role(USER_ROLE_ID)
-    request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
-    poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
-
-    #check for channel and user role
-    if role is None:
-        await ctx.send("Role not found.")
-        return
-    if request_channel is None or poll_channel is None:
-        await ctx.send("One or more channels not found.")
-        return
-
-    #tries to change channel perms
-    try:
-        await request_channel.set_permissions(role, view_channel=False)
-        await poll_channel.set_permissions(role, view_channel=True)
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to change channel permissions.")
-    except Exception as e:
-        await ctx.send(f"Failed to set channel permissions: {e}")
-
-    #makes poll in poll channel
-    await create_poll_in_channel(poll_channel)
-    await ctx.send("Polls are now open!")
-
-#------- CLOSES POLL CHANNEL AND POSTS RESULTS
-@bot.command(name="closepolls")
-@commands.has_permissions(kick_members=True)
-async def close_polls(ctx):
-    """Closes poll channel to users and outputs winners"""
-    role = ctx.guild.get_role(USER_ROLE_ID)
-    request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
-    poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
-
-    await ctx.send("Closing polls...")
-
-    #get all poll items
-    cursor.execute("SELECT title, cover_url, message_id, emote_text FROM poll_items")
-    poll_list = cursor.fetchall()
-
-
-    #tries to hide both channels
-    try:
-        await request_channel.set_permissions(role, view_channel=False)
-        await poll_channel.set_permissions(role, view_channel=False)
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to change channel permissions.")
-    except Exception as e:
-        await ctx.send(f"Failed to set channel permissions: {e}")
-
-    #dummy winners for easy initial comparison
-    first = [["dummy", 0, ""]]
-    second = [["dummy2", 0, ""]]
-
-    channel = ctx.channel
-
-    #iterates through all items in poll_messages
-    for title, cover_url, message_id, emote in poll_list:
-        try:
-            message = await channel.fetch_message(message_id)
-        except discord.NotFound:
-            continue  # Skip if message was deleted
-
-        #counts number of votes on a message
-        for reaction in message.reactions:
-            #checks for initially used emoji to filter fake votes
-            if str(reaction.emoji) == emote:
-                count = reaction.count
-                #removes bot "vote"
-                if reaction.me:
-                    count -= 1
-
-                #winner logic
-                if count > first[0][1]:
-                    second = first
-                    first = [[title, count, cover_url]]
-                elif count == first[0][1]:
-                    first.append([title, count, cover_url])
-                elif count > second[0][1]:
-                    second = [[title, count, cover_url]]
-                elif count == second[0][1]:
-                    second.append([title, count, cover_url])
-
-    # Output results
-    result_msg = "**Poll Results**\n\n**Top Votes:**\n"
-    for entry in first:
-        if entry[0] != "dummy":
-            result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
-
-    if(len(first)==1):
-        result_msg += "\n**Second Place:**\n"
-        for entry in second:
-            if entry[0] != "dummy2":
-                result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
-
-    #announce winners
-    await ctx.send(result_msg) 
-
-    #clear poll list
-    cursor.execute("DELETE FROM poll_items")
-    conn.commit()
-
-                
-#------- VIEW EMOTE LIST
-@bot.command(name="viewemotes")
-@commands.has_permissions(kick_members=True)
-async def view_emotes(ctx):
-    """shows the list of emotes used for the polls"""
-    emotes = get_emote_items()
-
-    # Send emotes in groups of 10 per message
-    chunk_size = 10
-    for i in range(0, len(emotes), chunk_size):
-        chunk = emotes[i:i + chunk_size]
-        await ctx.send(" ".join(chunk))
 
 #---------- GET EMOJI ID
 def extract_emoji_id(emote_str):
@@ -853,32 +573,324 @@ async def validate_emote(ctx, emote: str):
 
     return True
 
-#-------- ADD EMOTE TO POLL EMOTE LIST
-@bot.command(name="addemote")
-@commands.has_permissions(kick_members=True)
-async def add_emote(ctx, emote: str):
-    """Add an emote to the list of emotes used for poll reactions"""
+#group for commands regarding polls
+class polls_group(commands.Cog, name='Polls'):
+    def __init__(self, bot):
+        self.bot = bot
 
-    #if emote valid add to db
-    if await validate_emote(ctx, emote):
-        try:
-            add_emote_item(emote)
-            await ctx.send(f"Emoji {emote} added to the emoji list!")
-        except Exception as e:
-            await ctx.send(f"Failed to add emoji: {e}")
+    #------- MAUNAL POLL GENERATION TRIGGER
+    @commands.command(name="createpoll", brief="Make a poll")
+    @commands.has_permissions(kick_members=True)
+    async def create_poll(self, ctx):
+        """Manually create a poll from the stored requests"""
 
-#--------- REMOVE EMOTE FROM POLL LIST
-@bot.command(name="removeemote")
-@commands.has_permissions(kick_members=True)
-async def remove_emote(ctx, emote: str):
-    """Remove an emote from the list of emotes used for poll reactions"""
-
-    try:
-        remove_emote_item(emote)
-        await ctx.send(f"Emoji {emote} removed from the database.")
-    except Exception as e:
-        await ctx.send(f"Emoji {emote} not found in the database.")
-
+        #only works in set poll channel
+        if ctx.channel.id != POLLS_CHANNEL_ID:
+            await ctx.send("Wrong channel")
+            return
         
+        await create_poll_in_channel(ctx.channel)
+    
+    # ---------- Poll Viewer ----------
+    @commands.command(name="viewpoll", brief="See poll items")
+    @commands.has_permissions(kick_members=True)
+    async def view_poll(self, ctx):
+        """View all the titles and ids of the animes in the request list"""
+        #Sends empty list msg if poll list is empty
 
-bot.run(TOKEN)
+        #get all poll items
+        cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")
+        poll_list = cursor.fetchall()
+
+        if poll_list == []:
+            await ctx.send("The poll list is empty")
+
+        #prints all items in poll sorted alphabetically
+        for title, anime_id in poll_list:
+            await ctx.send(f"{title} ({anime_id})")
+
+    #------- CLOSES POLL CHANNEL AND POSTS RESULTS
+    @commands.command(name="closepolls", brief="End the current poll")
+    @commands.has_permissions(kick_members=True)
+    async def close_polls(self, ctx):
+        """Hides the poll channel from general user role, tally up votes and display the winners"""
+        role = ctx.guild.get_role(USER_ROLE_ID)
+        request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
+        poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+
+        await ctx.send("Closing polls...")
+
+        #get all poll items
+        cursor.execute("SELECT title, cover_url, message_id, emote_text FROM poll_items")
+        poll_list = cursor.fetchall()
+
+
+        #tries to hide both channels
+        try:
+            await request_channel.set_permissions(role, view_channel=False)
+            await poll_channel.set_permissions(role, view_channel=False)
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to change channel permissions.")
+        except Exception as e:
+            await ctx.send(f"Failed to set channel permissions: {e}")
+
+        #dummy winners for easy initial comparison
+        first = [["dummy", 0, ""]]
+        second = [["dummy2", 0, ""]]
+
+        channel = ctx.channel
+
+        #iterates through all items in poll_messages
+        for title, cover_url, message_id, emote in poll_list:
+            try:
+                message = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                continue  # Skip if message was deleted
+
+            #counts number of votes on a message
+            for reaction in message.reactions:
+                #checks for initially used emoji to filter fake votes
+                if str(reaction.emoji) == emote:
+                    count = reaction.count
+                    #removes bot "vote"
+                    if reaction.me:
+                        count -= 1
+
+                    #winner logic
+                    if count > first[0][1]:
+                        second = first
+                        first = [[title, count, cover_url]]
+                    elif count == first[0][1]:
+                        first.append([title, count, cover_url])
+                    elif count > second[0][1]:
+                        second = [[title, count, cover_url]]
+                    elif count == second[0][1]:
+                        second.append([title, count, cover_url])
+
+        # Output results
+        result_msg = "**Poll Results**\n\n**Top Votes:**\n"
+        for entry in first:
+            if entry[0] != "dummy":
+                result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
+
+        if(len(first)==1):
+            result_msg += "\n**Second Place:**\n"
+            for entry in second:
+                if entry[0] != "dummy2":
+                    result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
+
+        #announce winners
+        await ctx.send(result_msg) 
+
+        #clear poll list
+        cursor.execute("DELETE FROM poll_items")
+        conn.commit()
+
+    #------- OPENS REQUEST CHANNEL FOR REQUESTS
+    @commands.command(name="openrequests", brief="Open requests for users")
+    @commands.has_permissions(kick_members=True)
+    async def open_requests(self, ctx, *, theme: str = ""):
+        """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""
+        role = ctx.guild.get_role(USER_ROLE_ID)
+        request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
+        poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+
+    #checks for set role and request channel
+        if role is None:
+            await ctx.send("Role not found.")
+            return
+        if request_channel is None or poll_channel is None:
+            await ctx.send("One or more channels not found.")
+            return
+
+        await ctx.send(f"Opening Requests...")
+
+        #purge both channels
+        await request_channel.purge(limit=None)
+        await poll_channel.purge(limit=None)
+
+        #set channel name to current theme
+        channel_name = f"🎬丨「requests」{theme}"
+
+        #tries to change name and perms
+        try:
+            await request_channel.edit(name=channel_name)
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to rename that channel.")
+        except discord.HTTPException as e:
+            await ctx.send(f"Failed to rename the channel: {e}")
+
+        try:
+            await request_channel.set_permissions(role, view_channel=True)
+            await poll_channel.set_permissions(role, view_channel=False)
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to change channel permissions.")
+        except Exception as e:
+            await ctx.send(f"Failed to set channel permissions: {e}")
+
+        await ctx.send(f"Requests are now open", delete_after=5)
+        
+    #------- OPENS POLL CHANNEL AND MAKES POLL
+    @commands.command(name="openpolls", brief="Open polls for users")
+    @commands.has_permissions(kick_members=True)
+    async def open_polls(self, ctx):
+        """Hides request channel, shows polls channel and generates a poll"""
+        role = ctx.guild.get_role(USER_ROLE_ID)
+        request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
+        poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+
+        #check for channel and user role
+        if role is None:
+            await ctx.send("Role not found.")
+            return
+        if request_channel is None or poll_channel is None:
+            await ctx.send("One or more channels not found.")
+            return
+
+        #tries to change channel perms
+        try:
+            await request_channel.set_permissions(role, view_channel=False)
+            await poll_channel.set_permissions(role, view_channel=True)
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to change channel permissions.")
+        except Exception as e:
+            await ctx.send(f"Failed to set channel permissions: {e}")
+
+        #makes poll in poll channel
+        await create_poll_in_channel(poll_channel)
+        await ctx.send("Polls are now open!")
+
+    #-------- REMOVE ITEM FROM POLL --------
+    @commands.command(name="remove", brief="Remove poll item")
+    @commands.has_permissions(kick_members=True)
+    async def remove_poll_item(self, ctx, anime_id: str):
+        """Remove an item from the poll db using the anime anilist id number"""
+        try:
+            #convert input to int
+            anime_id_int = int(anime_id)
+
+            #remove item and get name
+            anime_name = remove_poll_item_from_db(anime_id_int)
+
+            #anime not in db
+            if(anime_name == None):
+                await ctx.send("No anime with that ID is in the poll list.")
+                return
+
+            await ctx.send(f"**{anime_name}** has been removed from the poll list.")
+
+        #id num not given
+        except ValueError:
+            await ctx.send("Invalid ID. Please enter a numeric ID.")        
+
+    #------- SET CHANNEL POLLS ARE MADE IN
+    @commands.command(name="setpollchannel", brief="Change the poll channel")
+    @commands.has_permissions(administrator=True)
+    async def set_poll_channel(self, ctx):
+        """Sets the poll channel to the channel the command is sent in and saves it to settings db"""
+        global POLLS_CHANNEL_ID
+        
+        POLLS_CHANNEL_ID = ctx.message.channel.id
+        cursor.execute("""
+            UPDATE settings
+            SET value = ?
+            WHERE setting = ?
+        """, (POLLS_CHANNEL_ID, "POLLS_CHANNEL_ID"))
+        conn.commit()
+        await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
+
+    #------- SET CHANNEL REQUESTS ARE MADE IN
+    @commands.command(name="setrequestchannel", brief="Change the request channel")
+    @commands.has_permissions(administrator=True)
+    async def set_request_channel(self, ctx):
+        """Sets the request channel to the channel the command is sent in and saves it to settings db"""
+        global REQUESTS_CHANNEL_ID
+
+        REQUESTS_CHANNEL_ID = ctx.message.channel.id
+        cursor.execute("""
+            UPDATE settings
+            SET value = ?
+            WHERE setting = ?
+        """, (REQUESTS_CHANNEL_ID, "REQUESTS_CHANNEL_ID"))
+        conn.commit()
+        await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
+
+    #------- SHOWS REQUEST AND POLL CHANNELS
+    @commands.command(name="viewchannels", brief="View poll/request channels")
+    @commands.has_permissions(kick_members=True)
+    async def view_channels(self, ctx):
+        """Displays the channels used for the polls and requests"""
+        await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
+
+    #------- SETS USER PERMS FOR POLL CHANNELS
+    @commands.command(name="setuserrole", brief="Change the user role")
+    @commands.has_permissions(administrator=True)
+    async def set_user_role(self, ctx, *,role_name: str):
+        """Change the user role that gets modified for viewing the polls and adding requests"""
+        global USER_ROLE_ID
+        #searches for role from given input
+        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        if role is None:
+            await ctx.send(f"Role `{role_name}` not found.")
+            return
+
+        #if found store id
+        USER_ROLE_ID = role.id
+        await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
+        cursor.execute("""
+            UPDATE settings
+            SET value = ?
+            WHERE setting = ?
+        """, (USER_ROLE_ID, "USER_ROLE_ID"))
+        conn.commit()
+  
+#groups regarding emote manipulation
+class emote_group(commands.Cog, name='Emotes'):
+    def __init__(self, bot):
+        self.bot = bot
+
+    #------- VIEW EMOTE LIST
+    @commands.command(name="viewemotes", brief="View emote list")
+    @commands.has_permissions(kick_members=True)
+    async def view_emotes(self, ctx):
+        """Displays a full list of the emotes used for poll votes"""
+        emotes = get_emote_items()
+
+        # Send emotes in groups of 10 per message
+        chunk_size = 10
+        for i in range(0, len(emotes), chunk_size):
+            chunk = emotes[i:i + chunk_size]
+            await ctx.send(" ".join(chunk))
+                
+    #--------- REMOVE EMOTE FROM POLL LIST
+    @commands.command(name="removeemote", brief="Remove emote from db")
+    @commands.has_permissions(kick_members=True)
+    async def remove_emote(self, ctx, emote: str):
+        """Remove an emote from the list of emotes used for poll reactions"""
+
+        try:
+            remove_emote_item(emote)
+            await ctx.send(f"Emoji {emote} removed from the database.")
+        except Exception as e:
+            await ctx.send(f"Emoji {emote} not found in the database.")
+
+    #-------- ADD EMOTE TO POLL EMOTE LIST
+    @commands.command(name="addemote", brief="Add emote to db")
+    @commands.has_permissions(kick_members=True)
+    async def add_emote(self, ctx, emote: str):
+        """Add an emote to the list of emotes used for poll reactions"""
+
+        #if emote valid add to db
+        if await validate_emote(self, ctx, emote):
+            try:
+                add_emote_item(emote)
+                await ctx.send(f"Emoji {emote} added to the emoji list!")
+            except Exception as e:
+                await ctx.send(f"Failed to add emoji: {e}")
+
+async def main():
+    await bot.add_cog(polls_group(bot))
+    await bot.add_cog(emote_group(bot))
+    await bot.start(TOKEN)
+
+asyncio.run(main())
