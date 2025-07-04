@@ -1,3 +1,4 @@
+import datetime
 import discord, requests, re, sqlite3, asyncio
 from discord.ext import commands, tasks
 from config import TOKEN
@@ -16,6 +17,7 @@ cursor = conn.cursor()
 REQUESTS_CHANNEL_ID = 1382060973355171890  # The requests channel ID
 POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
 USER_ROLE_ID = 1014624946758098975 #weeb roll id
+OWNER_ID = 453186114916974612 #my user 
 
 #poll support variables
 ANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
@@ -148,6 +150,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f'We have logged in as {bot.user}')
+    try:
+        owner = await bot.fetch_user(123456789012345678)
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        await owner.send(f"Bot restarted at `{now}`.")
+    except Exception as e:
+        print(f"Failed to send DM: {e}")
 
 @bot.event
 async def on_message(message):
