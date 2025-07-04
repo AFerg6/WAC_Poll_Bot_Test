@@ -1,4 +1,5 @@
 import datetime
+import subprocess
 import discord, requests, re, sqlite3, asyncio
 from discord.ext import commands, tasks
 from config import TOKEN
@@ -143,6 +144,12 @@ else:
 
 #update table with writen data
 conn.commit()
+
+#command decorator to check if the user is the owner(me)
+def is_owner():
+    def predicate(ctx):
+        return ctx.author.id == OWNER_ID
+    return commands.check(predicate)
 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -895,6 +902,26 @@ class emote_group(commands.Cog, name='Emotes'):
                 await ctx.send(f"Emoji {emote} added to the emoji list!")
             except Exception as e:
                 await ctx.send(f"Failed to add emoji: {e}")
+
+#updates the bot on command hopefully
+@bot.command(name="updatebot", brief="update bot from git page")
+@is_owner
+async def update_bot(ctx):
+    await ctx.send("Starting update...")
+
+    # Run 'git pull'
+    result = subprocess.run(["git", "pull"], capture_output=True, text=True)
+    await ctx.send(f"Git pull output:\n```\n{result.stdout}\n```")
+
+    # (Optional) Install new dependencies if requirements.txt changed
+    # You can check result.stdout for changes or just run pip install -r requirements.txt
+    result_pip = subprocess.run(["pip", "install", "-r", "requirements.txt"], capture_output=True, text=True)
+    await ctx.send(f"Pip install output:\n```\n{result_pip.stdout}\n```")
+
+    # Restart the bot (simple method: exit and rely on a systemd or other service manager to restart)
+    await ctx.send("Restarting bot now...")
+    await bot.close()  # cleanly close the bot to allow restart
+
 
 async def main():
     await bot.add_cog(polls_group(bot))
