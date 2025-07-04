@@ -151,7 +151,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f'We have logged in as {bot.user}')
     try:
-        owner = await bot.fetch_user(123456789012345678)
+        owner = await bot.fetch_user(OWNER_ID)
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         await owner.send(f"Bot restarted at `{now}`.")
     except Exception as e:
