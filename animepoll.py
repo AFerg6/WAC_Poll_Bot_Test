@@ -903,6 +903,7 @@ class emote_group(commands.Cog, name='Emotes'):
             except Exception as e:
                 await ctx.send(f"Failed to add emoji: {e}")
 
+<<<<<<< Updated upstream
 # #updates the bot on command hopefully
 @bot.command(name="updatebot", brief="update bot from git page")
 @is_owner()
@@ -922,6 +923,11 @@ async def update_bot(ctx):
     await ctx.send("Restarting bot now...")
     await bot.close()  # cleanly close the bot to allow restart
 
+=======
+@bot.command(name="hi", brief="hi")
+async def hi(ctx):
+    await ctx.send("hi")
+>>>>>>> Stashed changes
 
 async def main():
     await bot.add_cog(polls_group(bot))
