@@ -932,7 +932,7 @@ async def hi(ctx):
 
 @bot.command(name="banuser", brief="\"ban\" a user")
 @not_user(290968290711306251)
-async def ban_user(ctx, user: discord.member):
+async def ban_user(ctx, user: discord.Member):
     await ctx.send(f"{user.mention} has been banned")
 
 async def main():
