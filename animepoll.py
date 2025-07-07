@@ -151,6 +151,10 @@ def is_owner():
         return ctx.author.id == OWNER_ID
     return commands.check(predicate)
 
+def not_user(user_id):
+    def predicate(ctx):
+        return ctx.author.id != user_id
+    return commands.check(predicate)
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -925,6 +929,11 @@ async def update_bot(ctx):
 @bot.command(name="hi", brief="hi")
 async def hi(ctx):
     await ctx.send("hi")
+
+@bot.command(name="banuser", brief="\"ban\" a user")
+@not_user(290968290711306251)
+async def ban_user(ctx, user: discord.member):
+    await ctx.send(f"{user.mention} has been banned")
 
 async def main():
     await bot.add_cog(polls_group(bot))
