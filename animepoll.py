@@ -924,7 +924,7 @@ async def update_bot(ctx):
 
 @bot.command(name="hi", brief="hi")
 async def hi(ctx):
-    await ctx.send("hi")
+    await ctx.send("hi!")
 
 async def main():
     await bot.add_cog(polls_group(bot))
