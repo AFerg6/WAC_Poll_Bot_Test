@@ -24,6 +24,8 @@ OWNER_ID = 453186114916974612 #my user
 ANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
 custom_id_counter = -1
 
+ANIME_NIGHT_DETAILS=["Friday", "6-9pm", "SEB 2202"]
+
 # List of emotes for voting
 ORIGINAL_EMOTES = [
     "<a:02Dance:1016745011443929181>",
@@ -129,10 +131,15 @@ cursor.execute("SELECT COUNT(*) FROM settings")
 count = cursor.fetchone()[0]
 if count == 0:
     print("generating default settings")
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("REQUESTS_CHANNEL_ID", 1382060973355171890))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("POLLS_CHANNEL_ID", 1382061036244570182))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("USER_ROLE_ID", 1014624946758098975))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("custom_id_counter", -1))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("REQUESTS_CHANNEL_ID", REQUESTS_CHANNEL_ID))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("POLLS_CHANNEL_ID", POLLS_CHANNEL_ID))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("USER_ROLE_ID", USER_ROLE_ID))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("custom_id_counter", custom_id_counter))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("ANIME_NIGHT_DATE", ANIME_NIGHT_DETAILS[0]))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("ANIME_NIGHT_TIME", ANIME_NIGHT_DETAILS[1]))
+    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("ANIME_NIGHT_ROOM", ANIME_NIGHT_DETAILS[2]))
+
+
 else:
     cursor.execute("SELECT setting, value FROM settings")
     settings_list = dict(cursor.fetchall())
@@ -141,6 +148,7 @@ else:
     POLLS_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
     USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
     custom_id_counter = int(settings_list["custom_id_counter"])
+    ANIME_NIGHT_DETAILS = [settings_list["ANIME_NIGHT_DATE"], settings_list["ANIME_NIGHT_TIME"], settings_list["ANIME_NIGHT_ROOM"]]
 
 #update table with writen data
 conn.commit()
@@ -908,7 +916,7 @@ class emote_group(commands.Cog, name='Emotes'):
                 await ctx.send(f"Failed to add emoji: {e}")
 
 # #updates the bot on command hopefully
-@bot.command(name="updatebot", brief="update bot from git page")
+@bot.command(name="updatebot", brief="Update bot from git page")
 @is_owner()
 async def update_bot(ctx):
     await ctx.send("Starting update...")
@@ -934,6 +942,63 @@ async def hi(ctx):
 @not_user(290968290711306251)
 async def ban_user(ctx, user: discord.Member):
     await ctx.send(f"{user.mention} has been banned")
+
+# Anime night group command
+@bot.group(name="animenight", brief="See when anime nights are hosted")
+async def anime_night(ctx):
+    """Displays the details of the """
+    if ctx.invoked_subcommand is None:
+        date, time, room = ANIME_NIGHT_DETAILS[:3]
+        await ctx.send(f"Our anime nights are hosted every {date} from {time} in {room}")
+
+# Subgroup: set
+@anime_night.group(name="set", brief="Set details of anime night")
+@commands.has_permissions(kick_members=True)
+async def set_anime_night_detail(ctx):
+    if ctx.invoked_subcommand is None:
+        await ctx.send("Use the subcommands: `date`, `time`, or `room`.")
+
+# Subcommand: set date
+@set_anime_night_detail.command(name="date", brief="Change anime night date")
+@commands.has_permissions(kick_members=True)
+async def anime_night_set_date(ctx, *, date: str):
+    global ANIME_NIGHT_DETAILS 
+    ANIME_NIGHT_DETAILS[0] = date
+    await ctx.send(f"Anime night date set to {date}")
+    cursor.execute("""
+            UPDATE settings
+            SET value = ?
+            WHERE setting = ?
+        """, (ANIME_NIGHT_DETAILS[0], "ANIME_NIGHT_DATE"))
+    conn.commit()
+
+# Subcommand: set time
+@set_anime_night_detail.command(name="time", brief="Change anime night time")
+@commands.has_permissions(kick_members=True)
+async def anime_night_set_time(ctx, *, time: str):
+    global ANIME_NIGHT_DETAILS 
+    ANIME_NIGHT_DETAILS[1] = time
+    await ctx.send(f"Anime night time set to {time}")
+    cursor.execute("""
+            UPDATE settings
+            SET value = ?
+            WHERE setting = ?
+        """, (ANIME_NIGHT_DETAILS[1], "ANIME_NIGHT_TIME"))
+    conn.commit()
+
+# Subcommand: set room
+@set_anime_night_detail.command(name="room", brief="Change anime night room")
+@commands.has_permissions(kick_members=True)
+async def anime_night_set_room(ctx, *, room: str):
+    global ANIME_NIGHT_DETAILS 
+    ANIME_NIGHT_DETAILS[2] = room
+    await ctx.send(f"Anime night room set to {room}")
+    cursor.execute("""
+            UPDATE settings
+            SET value = ?
+            WHERE setting = ?
+        """, (ANIME_NIGHT_DETAILS[2], "ANIME_NIGHT_ROOM"))
+    conn.commit()
 
 async def main():
     await bot.add_cog(polls_group(bot))
