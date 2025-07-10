@@ -635,6 +635,7 @@ class polls_group(commands.Cog, name='Polls'):
         #prints all items in poll sorted alphabetically
         for title, anime_id in poll_list:
             await ctx.send(f"{title} ({anime_id})")
+        await ctx.send("End of poll")
 
     #------- CLOSES POLL CHANNEL AND POSTS RESULTS
     @commands.command(name="closepolls", brief="End the current poll")
