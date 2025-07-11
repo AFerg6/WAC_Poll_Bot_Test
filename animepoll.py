@@ -1,7 +1,11 @@
-import datetime
+import discord
+import requests
+import re
+import sqlite3
+import asyncio
 import subprocess
-import discord, requests, re, sqlite3, asyncio
-from discord.ext import commands, tasks
+import datetime
+from discord.ext import commands
 from config import TOKEN
 
 
@@ -10,21 +14,21 @@ intents.members = True  # SERVER MEMBERS INTENT
 intents.presences = True  # PRESENCE INTENT
 intents.message_content = True
 
-#sql databse objects
+# SQL databse objects
 conn = sqlite3.connect('botdata.db')
 cursor = conn.cursor()
 
-#set channel and user ids
+# Set channel and user ids
 REQUESTS_CHANNEL_ID = 1382060973355171890  # The requests channel ID
 POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
-USER_ROLE_ID = 1014624946758098975 #weeb roll id
-OWNER_ID = 453186114916974612 #my user 
+USER_ROLE_ID = 1014624946758098975  # weeb roll id
+OWNER_ID = 453186114916974612  # my user id
 
-#poll support variables
-ANIME_CACHE: dict[int, dict] = {} # message_id -> list of anime
+# Poll support variables
+ANIME_CACHE: dict[int, dict] = {}  # message_id -> list of anime
 custom_id_counter = -1
 
-ANIME_NIGHT_DETAILS=["Friday", "6-9pm", "SEB 2202"]
+ANIME_NIGHT_DETAILS = ["Friday", "6-9pm", "SEB 2202"]
 
 # List of emotes for voting
 ORIGINAL_EMOTES = [
@@ -90,7 +94,7 @@ ORIGINAL_EMOTES = [
     "<a:animechair:1016745198828650517>",
 ]
 
-#make poll item table
+# Make poll item table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS poll_items (
     anime_id INTEGER PRIMARY KEY,
@@ -101,7 +105,7 @@ CREATE TABLE IF NOT EXISTS poll_items (
 );
 ''')
 
-#make emote table
+# Make emote table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS reaction_emotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +113,7 @@ CREATE TABLE IF NOT EXISTS reaction_emotes (
 )
 ''')
 
-#make settings table
+# Make settings table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS settings (
                setting TEXT UNIQUE,
@@ -117,28 +121,50 @@ CREATE TABLE IF NOT EXISTS settings (
 )
 ''')
 
-#if emote table is empty fill it with predefined list
+# If emote table is empty fill it with predefined list
 cursor.execute("SELECT COUNT(*) FROM reaction_emotes")
 count = cursor.fetchone()[0]
-if count==0:
+if count == 0:
     print("generating new emote table")
     for emote in ORIGINAL_EMOTES:
-        cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
+        cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)",
+                       (emote,)
+                       )
     print("initial emotes loaded to db")
 
-#if settings is empty fill with predefined settings
+# If settings is empty fill with predefined settings
 cursor.execute("SELECT COUNT(*) FROM settings")
 count = cursor.fetchone()[0]
 if count == 0:
     print("generating default settings")
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("REQUESTS_CHANNEL_ID", REQUESTS_CHANNEL_ID))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("POLLS_CHANNEL_ID", POLLS_CHANNEL_ID))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("USER_ROLE_ID", USER_ROLE_ID))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("custom_id_counter", custom_id_counter))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("ANIME_NIGHT_DATE", ANIME_NIGHT_DETAILS[0]))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("ANIME_NIGHT_TIME", ANIME_NIGHT_DETAILS[1]))
-    cursor.execute("INSERT INTO settings (setting, value) VALUES (?, ?)", ("ANIME_NIGHT_ROOM", ANIME_NIGHT_DETAILS[2]))
-
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("REQUESTS_CHANNEL_ID", REQUESTS_CHANNEL_ID)
+        )
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("POLLS_CHANNEL_ID", POLLS_CHANNEL_ID)
+        )
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("USER_ROLE_ID", USER_ROLE_ID)
+        )
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("custom_id_counter", custom_id_counter)
+    )
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("ANIME_NIGHT_DATE", ANIME_NIGHT_DETAILS[0])
+    )
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("ANIME_NIGHT_TIME", ANIME_NIGHT_DETAILS[1])
+    )
+    cursor.execute(
+        "INSERT INTO settings (setting, value) VALUES (?, ?)",
+        ("ANIME_NIGHT_ROOM", ANIME_NIGHT_DETAILS[2])
+    )
 
 else:
     cursor.execute("SELECT setting, value FROM settings")
@@ -148,10 +174,16 @@ else:
     POLLS_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
     USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
     custom_id_counter = int(settings_list["custom_id_counter"])
-    ANIME_NIGHT_DETAILS = [settings_list["ANIME_NIGHT_DATE"], settings_list["ANIME_NIGHT_TIME"], settings_list["ANIME_NIGHT_ROOM"]]
+    ANIME_NIGHT_DETAILS = [
+        settings_list["ANIME_NIGHT_DATE"],
+        settings_list["ANIME_NIGHT_TIME"],
+        settings_list["ANIME_NIGHT_ROOM"]
+        ]
 
-#update table with writen data
+
+# Update table with writen data
 conn.commit()
+
 
 # command decorator to check if the user is the owner(me)
 def is_owner():
@@ -159,12 +191,15 @@ def is_owner():
         return ctx.author.id == OWNER_ID
     return commands.check(predicate)
 
+
 def not_user(user_id):
     def predicate(ctx):
         return ctx.author.id != user_id
     return commands.check(predicate)
 
+
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 @bot.event
 async def on_ready():
@@ -176,15 +211,18 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to send DM: {e}")
 
+
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
 
-#------- ADD ITEM TO POLL DB
+
+# ------- ADD ITEM TO POLL DB
 async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = ""):
     try:
         cursor.execute(
-            "INSERT INTO poll_items (anime_id, title, cover_url) VALUES (?, ?, ?)",
+            "INSERT INTO poll_items (anime_id, title, cover_url) "
+            "VALUES (?, ?, ?)",
             (anime_id, title, cover_url)
         )
         conn.commit()
@@ -195,54 +233,70 @@ async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = ""):
         if ctx:
             await ctx.send(f"**{title}** is already in the poll list.")
 
-#------- ADD EMOTE TO DB
+
+# ------- ADD EMOTE TO DB
 def add_emote_item(emote: str):
-    cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)", (emote,))
+    cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)",
+                   (emote,)
+                   )
     conn.commit()
 
-#------- REMOVE EMOTE FROM DB  
+
+# ------- REMOVE EMOTE FROM DB
 def remove_emote_item(emote: str):
-    cursor.execute("DELETE FROM reaction_emotes WHERE emote_text = ?", (emote,))
+    cursor.execute("DELETE FROM reaction_emotes WHERE emote_text = ?",
+                   (emote,)
+                   )
     conn.commit()
-#------- FRETRIEVE EMOTES FROM DB
+
+
+# ------- FRETRIEVE EMOTES FROM DB
 def get_emote_items():
     cursor.execute("SELECT emote_text FROM reaction_emotes ORDER BY id ASC")
     emotes = [row[0] for row in cursor.fetchall()]
     return emotes
 
-#------- REMOVE ANIME FROM POLL DB
+
+# ------- REMOVE ANIME FROM POLL DB
 def remove_poll_item_from_db(anime_id: int):
-    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ?", (anime_id,))
+    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ?",
+                   (anime_id,)
+                   )
     result = cursor.fetchone()
 
     if result is None:
         return None  # No match found
 
     anime_name = result[0]
-    cursor.execute("DELETE FROM poll_items WHERE anime_id = ?", (anime_id,))
+    cursor.execute("DELETE FROM poll_items WHERE anime_id = ?",
+                   (anime_id,))
     conn.commit()
     return anime_name
 
-#------- POLL GENERATOR
+
+# ------- POLL GENERATOR
 async def create_poll_in_channel(channel: int):
     global custom_id_counter
 
-    #get items used in the poll
+    # Get items used in the poll
     cursor.execute("SELECT title FROM poll_items")
     poll_list = cursor.fetchall()
     titles = [row[0] for row in poll_list]
 
-    #grab emojis 
+    # Grab emojis from the database
     emotes = get_emote_items()
-    
-    #reset custom id counter
+
+    # Reset custom id counter
     custom_id_counter = -1
-    cursor.execute("""UPDATE settings SET value = ? WHERE setting = ? """, (custom_id_counter, "custom_id_counter"))
+    cursor.execute("""UPDATE settings SET value = ? WHERE setting = ? """,
+                   (custom_id_counter,
+                    "custom_id_counter")
+                   )
     conn.commit()
 
-    #clear local emnbed cache to free up space
+    # Clear local embed cache to free up space
     ANIME_CACHE.clear()
-    
+
     # Create polls using the extracted anime names
     for idx, title in enumerate(titles):
         if idx < len(emotes):
@@ -256,10 +310,11 @@ async def create_poll_in_channel(channel: int):
     """, (emote, sent_message.id, title))
             conn.commit()
 
+
 # ---------- EMBED BUILDER ----------
 def make_anime_embed(media: dict) -> discord.Embed:
     """Builds a Discord embed from a single AniList Media dict."""
-    #im not going to even pretend i know what happening here
+    # I'm not going to even pretend I know what's happening here
     title = (
         media.get("title", {}).get("english")
         or media.get("title", {}).get("romaji")
@@ -278,24 +333,52 @@ def make_anime_embed(media: dict) -> discord.Embed:
         embed.set_thumbnail(url=cover)
 
     # Row 1
-    embed.add_field(name="Type", value=media.get("format", "—"), inline=True)
-    embed.add_field(name="Episodes", value=media.get("episodes", "—"), inline=True)
-    embed.add_field(name="Status", value=media.get("status", "—").title(), inline=True)
+    embed.add_field(
+        name="Type",
+        value=media.get("format", "—"),
+        inline=True
+        )
+    embed.add_field(
+        name="Episodes",
+        value=media.get("episodes", "—"),
+        inline=True
+        )
+    embed.add_field(
+        name="Status",
+        value=media.get("status", "—").title(),
+        inline=True
+    )
 
     # Row 2
     season = media.get("season")
     yr = media.get("seasonYear")
     embed.add_field(
-        name="Season", value=f"{season.title()} {yr}" if season and yr else "—", inline=True
+        name="Season",
+        value=f"{season.title()} {yr}" if season and yr else "—", inline=True
     )
     score = media.get("averageScore")
-    embed.add_field(name="Average Score", value=f"{score}%" if score else "N/A", inline=True)
+    embed.add_field(
+        name="Average Score",
+        value=f"{score}%" if score else "N/A",
+        inline=True
+    )
 
     genres = media.get("genres", [])
-    embed.add_field(name="Genres", value=", ".join(genres[:4]) if genres else "—", inline=True)
+    embed.add_field(
+        name="Genres",
+        value=(
+            ", ".join(genres[:4]) 
+            if genres
+            else "—"
+            ),
+        inline=True
+    )
 
     # Description
-    description = media.get("description", "No description available.").replace("<br>", "\n")
+    description = media.get(
+        "description",
+        "No description available."
+        ).replace("<br>", "\n")
     embed.add_field(name="Description", value=description[:1024], inline=False)
 
     # Links
@@ -305,10 +388,14 @@ def make_anime_embed(media: dict) -> discord.Embed:
 
     return embed
 
+
 # ---------- ANILSIT SEARCH  ----------
 def search_anime(title: str):
-    #actual witchcraft
-    """Search AniList for <title>, return an Embed for the most-popular match (or an error string)."""
+    # Actual witchcraft
+    """
+    Search AniList for <title>, return an Embed for the most-popular match(or an error string).
+    If no results found, return a string prompting for a custom title.
+    """  # noqa: E501
     url = "https://graphql.anilist.co"
     query = '''
 query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
@@ -353,10 +440,11 @@ query ($search: String, $sort: [MediaSort], $isAdult: Boolean) {
 
     return media
 
-#---------- ANILIST SEARCH BY ID
-#unused but left for potential future use
+
+# ---------- ANILIST SEARCH BY ID
+# Unused but left for potential future use
 def search_anime_by_id(anime_id: int):
-    #witchcraft p2
+    # Witchcraft p2
     """Search AniList by ID, return a single Media dict or an error string."""
     url = "https://graphql.anilist.co"
     query = '''
@@ -399,21 +487,28 @@ query ($id: Int) {
         return "No anime found for ID."
 
     return media
-    
-#------ ANIME SEARCH
+
+
+# ------ ANIME SEARCH
 @bot.command(name="anime", brief="Find and anime")
 async def anime(ctx, *, anime_name: str):
-    """Searches for an anime from anilist and shows the top 5. If in the set request channe adds to the poll list otherwise shows anime details"""
+    """
+    Searches for an anime from anilist and shows the top 5.
+    If in the set request channel adds to the poll list.
+    Otherwise shows anime details.
+    """
     global custom_id_counter
 
     result = search_anime(anime_name)
 
-    #if no result found prompt for a custom title
+    # If no result found prompt for a custom title
     if isinstance(result, str):
         await ctx.send(f"No results found for **{anime_name}**.")
-        await ctx.send("React with ✅ within 30 seconds to add it manually to the poll list.")
+        await ctx.send(
+            "React with ✅ within 30 seconds to add it manually to the poll list."   # noqa: E501
+            )
 
-        confirm_msg = await ctx.send("Do you want to add it as a custom entry?")
+        confirm_msg = await ctx.send("Do you want to add it as a custom entry?")   # noqa: E501
         await confirm_msg.add_reaction("✅")
 
         def check(reaction, user):
@@ -429,17 +524,20 @@ async def anime(ctx, *, anime_name: str):
             await ctx.send("⏳ Timed out. Custom entry not added.")
             return
 
-        #add anime with custom title and new id num to db
+        # Add anime with custom title and new id num to db
         custom_title = anime_name.strip()
         await add_poll_item(ctx, custom_title, custom_id_counter)
         custom_id_counter -= 1
-        cursor.execute("""UPDATE settings SET value = ? WHERE setting = ? """, (custom_id_counter, "custom_id_counter"))
+        cursor.execute(
+            """UPDATE settings SET value = ? WHERE setting = ? """,
+            (custom_id_counter, "custom_id_counter")
+            )
         conn.commit()
         return
 
     # Build embed with top results
     first = result[0]
-    cover_url = first.get("coverImage", {}).get("medium") or first.get("coverImage", {}).get("large")
+    cover_url = first.get("coverImage", {}).get("medium") or first.get("coverImage", {}).get("large")  # noqa: E501
 
     embed = discord.Embed(
         title=f'Top results for “{anime_name}”',
@@ -451,19 +549,26 @@ async def anime(ctx, *, anime_name: str):
 
     # Build the list line with numbered options, only up to 5 results
     nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
-    display_titles = []
 
     # First line: first three titles
     line1 = []
     for i, anime in enumerate(result[:3]):
-        title = anime["title"].get("english") or anime["title"].get("romaji") or "Unknown"
+        title = (
+            anime["title"].get("english")
+            or anime["title"].get("romaji")
+            or "Unknown"
+            )
         line1.append(f"{nums[i]}  {title}")
     line1_str = "     ".join(line1)  # 5 spaces for horizontal spacing
 
     # Second line: last two titles (if present)
     line2 = []
     for i, anime in enumerate(result[3:5], start=3):
-        title = anime["title"].get("english") or anime["title"].get("romaji") or "Unknown"
+        title = (
+            anime["title"].get("english")
+            or anime["title"].get("romaji")
+            or "Unknown"
+        )
         line2.append(f"{nums[i]}  {title}")
     line2_str = "     ".join(line2) if line2 else ""
 
@@ -487,19 +592,20 @@ async def anime(ctx, *, anime_name: str):
         "user_id": ctx.author.id,
     }
 
+
 # ----- REACTION HANDLER  (SELECTION / CANCEL) -------
 @bot.event
 async def on_reaction_add(reaction, user):
-    # ignore bot reactions
+    # Ignore bot reactions
     if user.bot:
         return
 
-    #save message to cache to keep interactivity active
+    # Save message to cache to keep interactivity active
     payload = ANIME_CACHE.get(reaction.message.id)
     if not payload:
-        return  # reaction isn't for an anime message
+        return  # Reaction isn't for an anime message
 
-    # only command author may react
+    # Only command author may react
     if user.id != payload["user_id"]:
         await reaction.message.channel.send(
             f"{user.mention} only the command author can make a selection."
@@ -508,7 +614,7 @@ async def on_reaction_add(reaction, user):
         return
 
     emoji = str(reaction.emoji)
-    nums  = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 
     # ---------- CANCEL ----------
     if emoji == "❌":
@@ -530,26 +636,31 @@ async def on_reaction_add(reaction, user):
     anime_id = chosen["id"]
     title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
 
-
-
-    #doesnt add item to poll list if not in set request channel
-    if reaction.message.channel.id == REQUESTS_CHANNEL_ID: 
-        cover_url = chosen.get("coverImage", {}).get("large") or chosen.get("coverImage", {}).get("medium") or None
-        # cursor.execute("INSERT INTO poll_items (anime_id, title, cover_url) VALUES (?, ?, ?)", (anime_id, title_en, cover_url))
-        await add_poll_item(reaction.message.channel, title_en, anime_id, cover_url)
+    # Doesnt add item to poll list if not in set request channel
+    if reaction.message.channel.id == REQUESTS_CHANNEL_ID:
+        cover_url = (
+            chosen.get("coverImage", {}).get("large")
+            or chosen.get("coverImage", {}).get("medium")
+            or None
+            )
+        await add_poll_item(
+            reaction.message.channel,
+            title_en,
+            anime_id,
+            cover_url
+            )
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
     else:
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
 
-
-
-    # clean up
+    # Clean up
     del ANIME_CACHE[reaction.message.id]
     await reaction.message.clear_reactions()
 
-#-------- CUSTOM ID GENERATION HANDLER -------
+
+# -------- CUSTOM ID GENERATION HANDLER -------
 def next_negative_id() -> int:
     """Return the next available negative ID (-1, -2, …) not yet used."""
     cursor.execute("SELECT anime_id FROM poll_items")
@@ -562,7 +673,8 @@ def next_negative_id() -> int:
         n -= 1
     return n
 
-#------- PURGE CHANNEL
+
+# ------- PURGE CHANNEL
 async def clear_channel(ctx):
     #checks if msg is pinned
     def not_pinned(msg):
@@ -578,7 +690,8 @@ async def clear_channel(ctx):
 
     await ctx.send(f"Cleared {deleted} messages.", delete_after=5)
 
-#---------- GET EMOJI ID
+
+# ---------- GET EMOJI ID
 def extract_emoji_id(emote_str):
     # Regex to match custom emoji format and extract ID
     match = re.match(r"<a?:\w+:(\d+)>", emote_str)
@@ -586,7 +699,8 @@ def extract_emoji_id(emote_str):
         return int(match.group(1))
     return None
 
-#--------- VALIDATE EMOTE CAN BE USED BY THE BOT
+
+# --------- VALIDATE EMOTE CAN BE USED BY THE BOT
 async def validate_emote(ctx, emote: str):
     emoji_id = extract_emoji_id(emote)
     if not emoji_id:
@@ -600,12 +714,13 @@ async def validate_emote(ctx, emote: str):
 
     return True
 
-#group for commands regarding polls
+
+# group for commands regarding polls
 class polls_group(commands.Cog, name='Polls'):
     def __init__(self, bot):
         self.bot = bot
 
-    #------- MAUNAL POLL GENERATION TRIGGER
+    # ------- MANUAL POLL GENERATION TRIGGER
     @commands.command(name="createpoll", brief="Make a poll")
     @commands.has_permissions(kick_members=True)
     async def create_poll(self, ctx):
@@ -623,22 +738,25 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def view_poll(self, ctx):
         """View all the titles and ids of the animes in the request list"""
-        #Sends empty list msg if poll list is empty
+        # Sends empty list msg if poll list is empty
 
-        #get all poll items
+        # Get all poll items
         cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")
         poll_list = cursor.fetchall()
 
         if poll_list == []:
             await ctx.send("The poll list is empty")
 
-        #prints all items in poll sorted alphabetically
+        # Prints all items in poll sorted alphabetically
         for title, anime_id in poll_list:
             await ctx.send(f"{title} ({anime_id})")
         await ctx.send("End of poll")
 
-    #------- CLOSES POLL CHANNEL AND POSTS RESULTS
-    @commands.command(name="closepolls", brief="End the current poll")
+    # ------- CLOSES POLL CHANNEL AND POSTS RESULTS
+    @commands.command(
+            name="closepolls",
+            brief="End the current poll"
+            )
     @commands.has_permissions(kick_members=True)
     async def close_polls(self, ctx):
         """Hides the poll channel from general user role, tally up votes and display the winners"""
@@ -714,8 +832,11 @@ class polls_group(commands.Cog, name='Polls'):
         cursor.execute("DELETE FROM poll_items")
         conn.commit()
 
-    #------- OPENS REQUEST CHANNEL FOR REQUESTS
-    @commands.command(name="openrequests", brief="Open requests for users")
+    # ------- OPENS REQUEST CHANNEL FOR REQUESTS
+    @commands.command(
+            name="openrequests",
+            brief="Open requests for users"
+            )
     @commands.has_permissions(kick_members=True)
     async def open_requests(self, ctx, *, theme: str = ""):
         """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""
@@ -758,8 +879,11 @@ class polls_group(commands.Cog, name='Polls'):
 
         await ctx.send(f"Requests are now open", delete_after=5)
         
-    #------- OPENS POLL CHANNEL AND MAKES POLL
-    @commands.command(name="openpolls", brief="Open polls for users")
+    # ------- OPENS POLL CHANNEL AND MAKES POLL
+    @commands.command(
+            name="openpolls",
+            brief="Open polls for users"
+            )
     @commands.has_permissions(kick_members=True)
     async def open_polls(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
@@ -788,8 +912,11 @@ class polls_group(commands.Cog, name='Polls'):
         await create_poll_in_channel(poll_channel)
         await ctx.send("Polls are now open!")
 
-    #-------- REMOVE ITEM FROM POLL --------
-    @commands.command(name="remove", brief="Remove poll item")
+    # -------- REMOVE ITEM FROM POLL --------
+    @commands.command(
+            name="remove",
+            brief="Remove poll item"
+            )
     @commands.has_permissions(kick_members=True)
     async def remove_poll_item(self, ctx, anime_id: str):
         """Remove an item from the poll db using the anime anilist id number"""
@@ -811,8 +938,11 @@ class polls_group(commands.Cog, name='Polls'):
         except ValueError:
             await ctx.send("Invalid ID. Please enter a numeric ID.")        
 
-    #------- SET CHANNEL POLLS ARE MADE IN
-    @commands.command(name="setpollchannel", brief="Change the poll channel")
+    # ------- SET CHANNEL POLLS ARE MADE IN
+    @commands.command(
+            name="setpollchannel",
+            brief="Change the poll channel"
+            )
     @commands.has_permissions(administrator=True)
     async def set_poll_channel(self, ctx):
         """Sets the poll channel to the channel the command is sent in and saves it to settings db"""
@@ -827,8 +957,11 @@ class polls_group(commands.Cog, name='Polls'):
         conn.commit()
         await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
 
-    #------- SET CHANNEL REQUESTS ARE MADE IN
-    @commands.command(name="setrequestchannel", brief="Change the request channel")
+    # ------- SET CHANNEL REQUESTS ARE MADE IN
+    @commands.command(
+            name="setrequestchannel",
+            brief="Change the request channel"
+            )
     @commands.has_permissions(administrator=True)
     async def set_request_channel(self, ctx):
         """Sets the request channel to the channel the command is sent in and saves it to settings db"""
@@ -843,26 +976,32 @@ class polls_group(commands.Cog, name='Polls'):
         conn.commit()
         await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
 
-    #------- SHOWS REQUEST AND POLL CHANNELS
-    @commands.command(name="viewchannels", brief="View poll/request channels")
+    # ------- SHOWS REQUEST AND POLL CHANNELS
+    @commands.command(
+            name="viewchannels",
+            brief="View poll/request channels"
+    )
     @commands.has_permissions(kick_members=True)
     async def view_channels(self, ctx):
         """Displays the channels used for the polls and requests"""
         await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
 
-    #------- SETS USER PERMS FOR POLL CHANNELS
-    @commands.command(name="setuserrole", brief="Change the user role")
+    # ------- SETS USER PERMS FOR POLL CHANNELS
+    @commands.command(
+        name="setuserrole",
+        brief="Change the user role"
+    )
     @commands.has_permissions(administrator=True)
     async def set_user_role(self, ctx, *,role_name: str):
         """Change the user role that gets modified for viewing the polls and adding requests"""
         global USER_ROLE_ID
-        #searches for role from given input
+        # Searches for role from given input
         role = discord.utils.get(ctx.guild.roles, name=role_name)
         if role is None:
             await ctx.send(f"Role `{role_name}` not found.")
             return
 
-        #if found store id
+        # If found store id
         USER_ROLE_ID = role.id
         await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
         cursor.execute("""
@@ -871,8 +1010,9 @@ class polls_group(commands.Cog, name='Polls'):
             WHERE setting = ?
         """, (USER_ROLE_ID, "USER_ROLE_ID"))
         conn.commit()
-  
-#groups regarding emote manipulation
+
+
+# roups regarding emote manipulation
 class emote_group(commands.Cog, name='Emotes'):
     def __init__(self, bot):
         self.bot = bot
@@ -916,6 +1056,7 @@ class emote_group(commands.Cog, name='Emotes'):
             except Exception as e:
                 await ctx.send(f"Failed to add emoji: {e}")
 
+
 # #updates the bot on command hopefully
 @bot.command(name="updatebot", brief="Update bot from git page")
 @is_owner()
@@ -935,14 +1076,17 @@ async def update_bot(ctx):
     await ctx.send("Restarting bot now...")
     await bot.close()  # cleanly close the bot to allow restart
 
+
 @bot.command(name="hi", brief="hi")
 async def hi(ctx):
     await ctx.send("hi")
+
 
 @bot.command(name="banuser", brief="\"ban\" a user")
 @not_user(290968290711306251)
 async def ban_user(ctx, user: discord.Member):
     await ctx.send(f"{user.mention} has been banned")
+
 
 # Anime night group command
 @bot.group(name="animenight", brief="See when anime nights are hosted")
@@ -952,12 +1096,14 @@ async def anime_night(ctx):
         date, time, room = ANIME_NIGHT_DETAILS[:3]
         await ctx.send(f"Our anime nights are hosted every {date} from {time} in {room}")
 
+
 # Subgroup: set
 @anime_night.group(name="set", brief="Set details of anime night")
 @commands.has_permissions(kick_members=True)
 async def set_anime_night_detail(ctx):
     if ctx.invoked_subcommand is None:
         await ctx.send("Use the subcommands: `date`, `time`, or `room`.")
+
 
 # Subcommand: set date
 @set_anime_night_detail.command(name="date", brief="Change anime night date")
@@ -973,6 +1119,7 @@ async def anime_night_set_date(ctx, *, date: str):
         """, (ANIME_NIGHT_DETAILS[0], "ANIME_NIGHT_DATE"))
     conn.commit()
 
+
 # Subcommand: set time
 @set_anime_night_detail.command(name="time", brief="Change anime night time")
 @commands.has_permissions(kick_members=True)
@@ -987,6 +1134,7 @@ async def anime_night_set_time(ctx, *, time: str):
         """, (ANIME_NIGHT_DETAILS[1], "ANIME_NIGHT_TIME"))
     conn.commit()
 
+
 # Subcommand: set room
 @set_anime_night_detail.command(name="room", brief="Change anime night room")
 @commands.has_permissions(kick_members=True)
@@ -1000,6 +1148,7 @@ async def anime_night_set_room(ctx, *, room: str):
             WHERE setting = ?
         """, (ANIME_NIGHT_DETAILS[2], "ANIME_NIGHT_ROOM"))
     conn.commit()
+
 
 async def main():
     await bot.add_cog(polls_group(bot))
