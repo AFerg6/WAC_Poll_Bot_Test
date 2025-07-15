@@ -1111,7 +1111,7 @@ async def ban_user(ctx, user: discord.Member):
 async def anime_night(ctx):
     """Displays the details of the """
     if ctx.invoked_subcommand is None:
-        date, time, room = ANIME_NIGHT_DETAILS[:3]
+        date, time, room = ANIME_NIGHT_DETAILS[:3]  # :3
         await ctx.send(f"Our anime nights are hosted every {date} from {time} in {room}")  # noqa: E501
 
 
