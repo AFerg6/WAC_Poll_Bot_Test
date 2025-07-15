@@ -367,7 +367,7 @@ def make_anime_embed(media: dict) -> discord.Embed:
     embed.add_field(
         name="Genres",
         value=(
-            ", ".join(genres[:4]) 
+            ", ".join(genres[:4])
             if genres
             else "—"
             ),
@@ -493,10 +493,8 @@ query ($id: Int) {
 @bot.command(name="anime", brief="Find and anime")
 async def anime(ctx, *, anime_name: str):
     """
-    Searches for an anime from anilist and shows the top 5.
-    If in the set request channel adds to the poll list.
-    Otherwise shows anime details.
-    """
+    Searches for an anime from anilist and shows the top 5. If in the set request channel adds to the poll list. Otherwise shows anime details.
+    """  # noqa: E501
     global custom_id_counter
 
     result = search_anime(anime_name)
@@ -537,8 +535,10 @@ async def anime(ctx, *, anime_name: str):
 
     # Build embed with top results
     first = result[0]
-    cover_url = first.get("coverImage", {}).get("medium") or first.get("coverImage", {}).get("large")  # noqa: E501
-
+    cover_url = (
+        first.get("coverImage", {}).get("medium")
+        or first.get("coverImage", {}).get("large")
+        )
     embed = discord.Embed(
         title=f'Top results for “{anime_name}”',
         description="React with a number to select, or ❌ to cancel.",
@@ -666,8 +666,11 @@ def next_negative_id() -> int:
     cursor.execute("SELECT anime_id FROM poll_items")
     poll_list = cursor.fetchall()
 
-    #uses the first avalible custom id number
-    used = {entry[0] for entry in poll_list if isinstance(entry[0], int) and entry[0] < 0}
+    # Uses the first available custom id number
+    used = {
+        entry[0] for entry in poll_list
+        if isinstance(entry[0], int) and entry[0] < 0
+    }
     n = -1
     while n in used:
         n -= 1
@@ -676,12 +679,12 @@ def next_negative_id() -> int:
 
 # ------- PURGE CHANNEL
 async def clear_channel(ctx):
-    #checks if msg is pinned
+    # Checks if msg is pinned
     def not_pinned(msg):
         return not msg.pinned
 
     deleted = 0
-    #deletes all messages not pinned
+    # Deletes all messages not pinned
     while True:
         purged = await ctx.channel.purge(limit=100, check=not_pinned)
         deleted += len(purged)
@@ -704,7 +707,7 @@ def extract_emoji_id(emote_str):
 async def validate_emote(ctx, emote: str):
     emoji_id = extract_emoji_id(emote)
     if not emoji_id:
-        await ctx.send("Invalid emote format. Please use a custom Discord emoji.")
+        await ctx.send("Invalid emote format. Please use a custom Discord emoji.")  # noqa: E501
         return False
 
     emoji = bot.get_emoji(emoji_id)
@@ -726,13 +729,13 @@ class polls_group(commands.Cog, name='Polls'):
     async def create_poll(self, ctx):
         """Manually create a poll from the stored requests"""
 
-        #only works in set poll channel
+        # only works in set poll channel
         if ctx.channel.id != POLLS_CHANNEL_ID:
             await ctx.send("Wrong channel")
             return
-        
+   
         await create_poll_in_channel(ctx.channel)
-    
+
     # ---------- Poll Viewer ----------
     @commands.command(name="viewpoll", brief="See poll items")
     @commands.has_permissions(kick_members=True)
@@ -741,7 +744,7 @@ class polls_group(commands.Cog, name='Polls'):
         # Sends empty list msg if poll list is empty
 
         # Get all poll items
-        cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")
+        cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")   # noqa: E501
         poll_list = cursor.fetchall()
 
         if poll_list == []:
@@ -759,50 +762,51 @@ class polls_group(commands.Cog, name='Polls'):
             )
     @commands.has_permissions(kick_members=True)
     async def close_polls(self, ctx):
-        """Hides the poll channel from general user role, tally up votes and display the winners"""
+        """Hides the poll channel from general user role, tally up votes and display the winners"""  # noqa: E501
         role = ctx.guild.get_role(USER_ROLE_ID)
         request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
         poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
 
         await ctx.send("Closing polls...")
 
-        #get all poll items
-        cursor.execute("SELECT title, cover_url, message_id, emote_text FROM poll_items")
+        # Get all poll items
+        cursor.execute(
+            "SELECT title, cover_url, message_id, emote_text FROM poll_items"
+        )
         poll_list = cursor.fetchall()
 
-
-        #tries to hide both channels
+        # Tries to hide both channels
         try:
             await request_channel.set_permissions(role, view_channel=False)
             await poll_channel.set_permissions(role, view_channel=False)
         except discord.Forbidden:
-            await ctx.send("I don't have permission to change channel permissions.")
+            await ctx.send("I don't have permission to change channel permissions.")  # noqa: E501
         except Exception as e:
             await ctx.send(f"Failed to set channel permissions: {e}")
 
-        #dummy winners for easy initial comparison
+        # Dummy winners for easy initial comparison
         first = [["dummy", 0, ""]]
         second = [["dummy2", 0, ""]]
 
         channel = ctx.channel
 
-        #iterates through all items in poll_messages
+        # Iterates through all items in poll_messages
         for title, cover_url, message_id, emote in poll_list:
             try:
                 message = await channel.fetch_message(message_id)
             except discord.NotFound:
                 continue  # Skip if message was deleted
 
-            #counts number of votes on a message
+            # Counts number of votes on a message
             for reaction in message.reactions:
-                #checks for initially used emoji to filter fake votes
+                # Checks for initially used emoji to filter fake votes
                 if str(reaction.emoji) == emote:
                     count = reaction.count
-                    #removes bot "vote"
+                    # Removes bot "vote"
                     if reaction.me:
                         count -= 1
 
-                    #winner logic
+                    # Winner logic
                     if count > first[0][1]:
                         second = first
                         first = [[title, count, cover_url]]
@@ -819,16 +823,19 @@ class polls_group(commands.Cog, name='Polls'):
             if entry[0] != "dummy":
                 result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
 
-        if(len(first)==1):
+        if (len(first) == 1):
             result_msg += "\n**Second Place:**\n"
             for entry in second:
                 if entry[0] != "dummy2":
-                    result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
+                    result_msg += (
+                        f"{entry[0]} ({entry[1]} votes)\n"
+                        f"{entry[2]}\n"
+                    )
 
-        #announce winners
-        await ctx.send(result_msg) 
+        # Announce winners
+        await ctx.send(result_msg)
 
-        #clear poll list
+        # Clear poll list
         cursor.execute("DELETE FROM poll_items")
         conn.commit()
 
@@ -839,12 +846,12 @@ class polls_group(commands.Cog, name='Polls'):
             )
     @commands.has_permissions(kick_members=True)
     async def open_requests(self, ctx, *, theme: str = ""):
-        """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""
+        """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""  # noqa: E501
         role = ctx.guild.get_role(USER_ROLE_ID)
         request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
         poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
 
-    #checks for set role and request channel
+    # Checks for set role and request channel
         if role is None:
             await ctx.send("Role not found.")
             return
@@ -852,16 +859,16 @@ class polls_group(commands.Cog, name='Polls'):
             await ctx.send("One or more channels not found.")
             return
 
-        await ctx.send(f"Opening Requests...")
+        await ctx.send("Opening Requests...")
 
-        #purge both channels
+        # Purge both channels
         await request_channel.purge(limit=None)
         await poll_channel.purge(limit=None)
 
-        #set channel name to current theme
+        # Set channel name to current theme
         channel_name = f"🎬丨「requests」{theme}"
 
-        #tries to change name and perms
+        # Tries to change name and perms
         try:
             await request_channel.edit(name=channel_name)
         except discord.Forbidden:
@@ -873,12 +880,12 @@ class polls_group(commands.Cog, name='Polls'):
             await request_channel.set_permissions(role, view_channel=True)
             await poll_channel.set_permissions(role, view_channel=False)
         except discord.Forbidden:
-            await ctx.send("I don't have permission to change channel permissions.")
+            await ctx.send("I don't have permission to change channel permissions.")  # noqa: E501
         except Exception as e:
             await ctx.send(f"Failed to set channel permissions: {e}")
 
-        await ctx.send(f"Requests are now open", delete_after=5)
-        
+        await ctx.send("Requests are now open", delete_after=5)
+
     # ------- OPENS POLL CHANNEL AND MAKES POLL
     @commands.command(
             name="openpolls",
@@ -891,7 +898,7 @@ class polls_group(commands.Cog, name='Polls'):
         request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
         poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
 
-        #check for channel and user role
+        # Check for channel and user role
         if role is None:
             await ctx.send("Role not found.")
             return
@@ -899,16 +906,16 @@ class polls_group(commands.Cog, name='Polls'):
             await ctx.send("One or more channels not found.")
             return
 
-        #tries to change channel perms
+        # Tries to change channel perms
         try:
             await request_channel.set_permissions(role, view_channel=False)
             await poll_channel.set_permissions(role, view_channel=True)
         except discord.Forbidden:
-            await ctx.send("I don't have permission to change channel permissions.")
+            await ctx.send("I don't have permission to change channel permissions.")  # noqa: E501
         except Exception as e:
             await ctx.send(f"Failed to set channel permissions: {e}")
 
-        #makes poll in poll channel
+        # Makes poll in poll channel
         await create_poll_in_channel(poll_channel)
         await ctx.send("Polls are now open!")
 
@@ -921,20 +928,20 @@ class polls_group(commands.Cog, name='Polls'):
     async def remove_poll_item(self, ctx, anime_id: str):
         """Remove an item from the poll db using the anime anilist id number"""
         try:
-            #convert input to int
+            # Convert input to int
             anime_id_int = int(anime_id)
 
-            #remove item and get name
+            # Remove item and get name
             anime_name = remove_poll_item_from_db(anime_id_int)
 
-            #anime not in db
-            if(anime_name == None):
+            # Anime not in db
+            if anime_name is None:
                 await ctx.send("No anime with that ID is in the poll list.")
                 return
 
-            await ctx.send(f"**{anime_name}** has been removed from the poll list.")
+            await ctx.send(f"**{anime_name}** has been removed from the poll list.")  # noqa: E501
 
-        #id num not given
+        # ID num not given
         except ValueError:
             await ctx.send("Invalid ID. Please enter a numeric ID.")        
 
@@ -945,7 +952,7 @@ class polls_group(commands.Cog, name='Polls'):
             )
     @commands.has_permissions(administrator=True)
     async def set_poll_channel(self, ctx):
-        """Sets the poll channel to the channel the command is sent in and saves it to settings db"""
+        """Sets the poll channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
         global POLLS_CHANNEL_ID
         
         POLLS_CHANNEL_ID = ctx.message.channel.id
@@ -964,7 +971,7 @@ class polls_group(commands.Cog, name='Polls'):
             )
     @commands.has_permissions(administrator=True)
     async def set_request_channel(self, ctx):
-        """Sets the request channel to the channel the command is sent in and saves it to settings db"""
+        """Sets the request channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
         global REQUESTS_CHANNEL_ID
 
         REQUESTS_CHANNEL_ID = ctx.message.channel.id
@@ -984,7 +991,7 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def view_channels(self, ctx):
         """Displays the channels used for the polls and requests"""
-        await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequets channel: <#{REQUESTS_CHANNEL_ID}>")
+        await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequest channel: <#{REQUESTS_CHANNEL_ID}>")  # noqa: E501
 
     # ------- SETS USER PERMS FOR POLL CHANNELS
     @commands.command(
@@ -992,8 +999,8 @@ class polls_group(commands.Cog, name='Polls'):
         brief="Change the user role"
     )
     @commands.has_permissions(administrator=True)
-    async def set_user_role(self, ctx, *,role_name: str):
-        """Change the user role that gets modified for viewing the polls and adding requests"""
+    async def set_user_role(self, ctx, *, role_name: str):
+        """Change the user role that gets modified for viewing the polls and adding requests"""  # noqa: E501
         global USER_ROLE_ID
         # Searches for role from given input
         role = discord.utils.get(ctx.guild.roles, name=role_name)
@@ -1003,7 +1010,7 @@ class polls_group(commands.Cog, name='Polls'):
 
         # If found store id
         USER_ROLE_ID = role.id
-        await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")
+        await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")  # noqa: E501
         cursor.execute("""
             UPDATE settings
             SET value = ?
@@ -1017,7 +1024,7 @@ class emote_group(commands.Cog, name='Emotes'):
     def __init__(self, bot):
         self.bot = bot
 
-    #------- VIEW EMOTE LIST
+    # ------- VIEW EMOTE LIST
     @commands.command(name="viewemotes", brief="View emote list")
     @commands.has_permissions(kick_members=True)
     async def view_emotes(self, ctx):
@@ -1030,7 +1037,7 @@ class emote_group(commands.Cog, name='Emotes'):
             chunk = emotes[i:i + chunk_size]
             await ctx.send(" ".join(chunk))
                 
-    #--------- REMOVE EMOTE FROM POLL LIST
+    # --------- REMOVE EMOTE FROM POLL LIST
     @commands.command(name="removeemote", brief="Remove emote from db")
     @commands.has_permissions(kick_members=True)
     async def remove_emote(self, ctx, emote: str):
@@ -1039,16 +1046,16 @@ class emote_group(commands.Cog, name='Emotes'):
         try:
             remove_emote_item(emote)
             await ctx.send(f"Emoji {emote} removed from the database.")
-        except Exception as e:
+        except Exception:
             await ctx.send(f"Emoji {emote} not found in the database.")
 
-    #-------- ADD EMOTE TO POLL EMOTE LIST
+    # -------- ADD EMOTE TO POLL EMOTE LIST
     @commands.command(name="addemote", brief="Add emote to db")
     @commands.has_permissions(kick_members=True)
     async def add_emote(self, ctx, emote: str):
         """Add an emote to the list of emotes used for poll reactions"""
 
-        #if emote valid add to db
+        # If emote valid add to db
         if await validate_emote(self, ctx, emote):
             try:
                 add_emote_item(emote)
@@ -1067,12 +1074,22 @@ async def update_bot(ctx):
     result = subprocess.run(["git", "pull"], capture_output=True, text=True)
     await ctx.send(f"Git pull output:\n```\n{result.stdout}\n```")
 
-    # (Optional) Install new dependencies if requirements.txt changed
-    # You can check result.stdout for changes or just run pip install -r requirements.txt
-    result_pip = subprocess.run(["pip", "install", "-r", "requirements.txt"], capture_output=True, text=True)
+    # Check if git pull was successful
+    if result.returncode != 0:
+        await ctx.send(f"Git pull failed: {result.stderr}")
+        return
+    await ctx.send("Update successful, installing requirements...")
+
+    # Run 'pip install -r requirements.txt'
+    result_pip = subprocess.run([
+        "pip",
+        "install",
+        "-r",
+        "requirements.txt"],
+        capture_output=True, text=True)
     await ctx.send(f"Pip install output:\n```\n{result_pip.stdout}\n```")
 
-    # Restart the bot (simple method: exit and rely on a systemd or other service manager to restart)
+    # Restart the bot
     await ctx.send("Restarting bot now...")
     await bot.close()  # cleanly close the bot to allow restart
 
@@ -1094,7 +1111,7 @@ async def anime_night(ctx):
     """Displays the details of the """
     if ctx.invoked_subcommand is None:
         date, time, room = ANIME_NIGHT_DETAILS[:3]
-        await ctx.send(f"Our anime nights are hosted every {date} from {time} in {room}")
+        await ctx.send(f"Our anime nights are hosted every {date} from {time} in {room}")  # noqa: E501
 
 
 # Subgroup: set
