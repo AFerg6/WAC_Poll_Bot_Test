@@ -1046,8 +1046,9 @@ class emote_group(commands.Cog, name='Emotes'):
         try:
             remove_emote_item(emote)
             await ctx.send(f"Emoji {emote} removed from the database.")
-        except Exception:
+        except Exception as e:
             await ctx.send(f"Emoji {emote} not found in the database.")
+            print(f"Error removing emoji: {e}")
 
     # -------- ADD EMOTE TO POLL EMOTE LIST
     @commands.command(name="addemote", brief="Add emote to db")
