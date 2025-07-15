@@ -733,7 +733,7 @@ class polls_group(commands.Cog, name='Polls'):
         if ctx.channel.id != POLLS_CHANNEL_ID:
             await ctx.send("Wrong channel")
             return
-   
+
         await create_poll_in_channel(ctx.channel)
 
     # ---------- Poll Viewer ----------
@@ -943,7 +943,7 @@ class polls_group(commands.Cog, name='Polls'):
 
         # ID num not given
         except ValueError:
-            await ctx.send("Invalid ID. Please enter a numeric ID.")        
+            await ctx.send("Invalid ID. Please enter a numeric ID.")
 
     # ------- SET CHANNEL POLLS ARE MADE IN
     @commands.command(
@@ -954,7 +954,7 @@ class polls_group(commands.Cog, name='Polls'):
     async def set_poll_channel(self, ctx):
         """Sets the poll channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
         global POLLS_CHANNEL_ID
-        
+
         POLLS_CHANNEL_ID = ctx.message.channel.id
         cursor.execute("""
             UPDATE settings
@@ -1036,7 +1036,7 @@ class emote_group(commands.Cog, name='Emotes'):
         for i in range(0, len(emotes), chunk_size):
             chunk = emotes[i:i + chunk_size]
             await ctx.send(" ".join(chunk))
-                
+
     # --------- REMOVE EMOTE FROM POLL LIST
     @commands.command(name="removeemote", brief="Remove emote from db")
     @commands.has_permissions(kick_members=True)
@@ -1127,7 +1127,7 @@ async def set_anime_night_detail(ctx):
 @set_anime_night_detail.command(name="date", brief="Change anime night date")
 @commands.has_permissions(kick_members=True)
 async def anime_night_set_date(ctx, *, date: str):
-    global ANIME_NIGHT_DETAILS 
+    global ANIME_NIGHT_DETAILS
     ANIME_NIGHT_DETAILS[0] = date
     await ctx.send(f"Anime night date set to {date}")
     cursor.execute("""
@@ -1142,7 +1142,7 @@ async def anime_night_set_date(ctx, *, date: str):
 @set_anime_night_detail.command(name="time", brief="Change anime night time")
 @commands.has_permissions(kick_members=True)
 async def anime_night_set_time(ctx, *, time: str):
-    global ANIME_NIGHT_DETAILS 
+    global ANIME_NIGHT_DETAILS
     ANIME_NIGHT_DETAILS[1] = time
     await ctx.send(f"Anime night time set to {time}")
     cursor.execute("""
@@ -1157,7 +1157,7 @@ async def anime_night_set_time(ctx, *, time: str):
 @set_anime_night_detail.command(name="room", brief="Change anime night room")
 @commands.has_permissions(kick_members=True)
 async def anime_night_set_room(ctx, *, room: str):
-    global ANIME_NIGHT_DETAILS 
+    global ANIME_NIGHT_DETAILS
     ANIME_NIGHT_DETAILS[2] = room
     await ctx.send(f"Anime night room set to {room}")
     cursor.execute("""
