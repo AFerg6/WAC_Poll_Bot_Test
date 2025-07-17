@@ -19,8 +19,8 @@ conn = sqlite3.connect('botdata.db')
 cursor = conn.cursor()
 
 # Set channel and user ids
-REQUESTS_CHANNEL_ID = 1382060973355171890  # The requests channel ID
-POLLS_CHANNEL_ID = 1382061036244570182  # The polls channel ID
+REQUEST_CHANNEL_ID = 1382060973355171890  # The requests channel ID
+POLL_CHANNEL_ID = 1382061036244570182  # The polls channel ID
 USER_ROLE_ID = 1014624946758098975  # weeb roll id
 OWNER_ID = 453186114916974612  # my user id
 
@@ -139,11 +139,11 @@ if count == 0:
     print("generating default settings")
     cursor.execute(
         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("REQUESTS_CHANNEL_ID", REQUESTS_CHANNEL_ID)
+        ("REQUESTS_CHANNEL_ID", REQUEST_CHANNEL_ID)
         )
     cursor.execute(
         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("POLLS_CHANNEL_ID", POLLS_CHANNEL_ID)
+        ("POLLS_CHANNEL_ID", POLL_CHANNEL_ID)
         )
     cursor.execute(
         "INSERT INTO settings (setting, value) VALUES (?, ?)",
@@ -170,8 +170,8 @@ else:
     cursor.execute("SELECT setting, value FROM settings")
     settings_list = dict(cursor.fetchall())
     print("fetching settings")
-    REQUESTS_CHANNEL_ID = int(settings_list["REQUESTS_CHANNEL_ID"])
-    POLLS_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
+    REQUEST_CHANNEL_ID = int(settings_list["REQUESTS_CHANNEL_ID"])
+    POLL_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
     USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
     custom_id_counter = int(settings_list["custom_id_counter"])
     ANIME_NIGHT_DETAILS = [
@@ -637,7 +637,7 @@ async def on_reaction_add(reaction, user):
     title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
 
     # Doesnt add item to poll list if not in set request channel
-    if reaction.message.channel.id == REQUESTS_CHANNEL_ID:
+    if reaction.message.channel.id == REQUEST_CHANNEL_ID:
         cover_url = (
             chosen.get("coverImage", {}).get("large")
             or chosen.get("coverImage", {}).get("medium")
@@ -730,7 +730,7 @@ class polls_group(commands.Cog, name='Polls'):
         """Manually create a poll from the stored requests"""
 
         # only works in set poll channel
-        if ctx.channel.id != POLLS_CHANNEL_ID:
+        if ctx.channel.id != POLL_CHANNEL_ID:
             await ctx.send("Wrong channel")
             return
 
@@ -757,15 +757,15 @@ class polls_group(commands.Cog, name='Polls'):
 
     # ------- CLOSES POLL CHANNEL AND POSTS RESULTS
     @commands.command(
-            name="closepolls",
+            name="closepoll",
             brief="End the current poll"
             )
     @commands.has_permissions(kick_members=True)
-    async def close_polls(self, ctx):
+    async def close_poll(self, ctx):
         """Hides the poll channel from general user role, tally up votes and display the winners"""  # noqa: E501
         role = ctx.guild.get_role(USER_ROLE_ID)
-        request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
-        poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+        request_channel = ctx.guild.get_channel(REQUEST_CHANNEL_ID)
+        poll_channel = ctx.guild.get_channel(POLL_CHANNEL_ID)
 
         await ctx.send("Closing polls...")
 
@@ -848,8 +848,8 @@ class polls_group(commands.Cog, name='Polls'):
     async def open_requests(self, ctx, *, theme: str = ""):
         """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""  # noqa: E501
         role = ctx.guild.get_role(USER_ROLE_ID)
-        request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
-        poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+        request_channel = ctx.guild.get_channel(REQUEST_CHANNEL_ID)
+        poll_channel = ctx.guild.get_channel(POLL_CHANNEL_ID)
 
     # Checks for set role and request channel
         if role is None:
@@ -888,15 +888,15 @@ class polls_group(commands.Cog, name='Polls'):
 
     # ------- OPENS POLL CHANNEL AND MAKES POLL
     @commands.command(
-            name="openpolls",
+            name="openpoll",
             brief="Open polls for users"
             )
     @commands.has_permissions(kick_members=True)
-    async def open_polls(self, ctx):
+    async def open_poll(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
         role = ctx.guild.get_role(USER_ROLE_ID)
-        request_channel = ctx.guild.get_channel(REQUESTS_CHANNEL_ID)
-        poll_channel = ctx.guild.get_channel(POLLS_CHANNEL_ID)
+        request_channel = ctx.guild.get_channel(REQUEST_CHANNEL_ID)
+        poll_channel = ctx.guild.get_channel(POLL_CHANNEL_ID)
 
         # Check for channel and user role
         if role is None:
@@ -953,16 +953,16 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(administrator=True)
     async def set_poll_channel(self, ctx):
         """Sets the poll channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
-        global POLLS_CHANNEL_ID
+        global POLL_CHANNEL_ID
 
-        POLLS_CHANNEL_ID = ctx.message.channel.id
+        POLL_CHANNEL_ID = ctx.message.channel.id
         cursor.execute("""
             UPDATE settings
             SET value = ?
             WHERE setting = ?
-        """, (POLLS_CHANNEL_ID, "POLLS_CHANNEL_ID"))
+        """, (POLL_CHANNEL_ID, "POLLS_CHANNEL_ID"))
         conn.commit()
-        await ctx.send(f"Poll channel set to <#{POLLS_CHANNEL_ID}>")
+        await ctx.send(f"Poll channel set to <#{POLL_CHANNEL_ID}>")
 
     # ------- SET CHANNEL REQUESTS ARE MADE IN
     @commands.command(
@@ -972,16 +972,16 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(administrator=True)
     async def set_request_channel(self, ctx):
         """Sets the request channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
-        global REQUESTS_CHANNEL_ID
+        global REQUEST_CHANNEL_ID
 
-        REQUESTS_CHANNEL_ID = ctx.message.channel.id
+        REQUEST_CHANNEL_ID = ctx.message.channel.id
         cursor.execute("""
             UPDATE settings
             SET value = ?
             WHERE setting = ?
-        """, (REQUESTS_CHANNEL_ID, "REQUESTS_CHANNEL_ID"))
+        """, (REQUEST_CHANNEL_ID, "REQUESTS_CHANNEL_ID"))
         conn.commit()
-        await ctx.send(f"Request channel set to <#{REQUESTS_CHANNEL_ID}>")
+        await ctx.send(f"Request channel set to <#{REQUEST_CHANNEL_ID}>")
 
     # ------- SHOWS REQUEST AND POLL CHANNELS
     @commands.command(
@@ -991,7 +991,7 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def view_channels(self, ctx):
         """Displays the channels used for the polls and requests"""
-        await ctx.send(f"Poll channel: <#{POLLS_CHANNEL_ID}>\nRequest channel: <#{REQUESTS_CHANNEL_ID}>")  # noqa: E501
+        await ctx.send(f"Poll channel: <#{POLL_CHANNEL_ID}>\nRequest channel: <#{REQUEST_CHANNEL_ID}>")  # noqa: E501
 
     # ------- SETS USER PERMS FOR POLL CHANNELS
     @commands.command(
