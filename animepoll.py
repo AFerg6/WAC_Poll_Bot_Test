@@ -1,10 +1,13 @@
-import discord
-import requests
-import re
-import sqlite3
 import asyncio
-import subprocess
 import datetime
+import time
+import discord
+import random
+import re
+import requests
+import sqlite3
+import subprocess
+
 from discord.ext import commands
 from config import TOKEN
 
@@ -718,6 +721,24 @@ async def validate_emote(ctx, emote: str):
     return True
 
 
+# ---------- GET MAX ANIME ID
+def get_max_anime_id():
+    query = '''
+    query ($isAdult: Boolean) {
+      Page(perPage: 1) {
+        media(type: ANIME, sort: ID_DESC, isAdult: $isAdult) {
+          id
+        }
+      }
+    }
+    '''
+    url = 'https://graphql.anilist.co'
+    response = requests.post(url, json={'query': query, 'variables': {"isAdult": False}})   # noqa: E501
+    data = response.json()
+
+    return data['data']['Page']['media'][0]['id']
+
+
 # group for commands regarding polls
 class polls_group(commands.Cog, name='Polls'):
     def __init__(self, bot):
@@ -749,6 +770,7 @@ class polls_group(commands.Cog, name='Polls'):
 
         if poll_list == []:
             await ctx.send("The poll list is empty")
+            return
 
         # Prints all items in poll sorted alphabetically
         for title, anime_id in poll_list:
@@ -756,10 +778,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send("End of poll")
 
     # ------- CLOSES POLL CHANNEL AND POSTS RESULTS
-    @commands.command(
-            name="closepoll",
-            brief="End the current poll"
-            )
+    @commands.command(name="closepoll", brief="End the current poll")
     @commands.has_permissions(kick_members=True)
     async def close_poll(self, ctx):
         """Hides the poll channel from general user role, tally up votes and display the winners"""  # noqa: E501
@@ -840,10 +859,7 @@ class polls_group(commands.Cog, name='Polls'):
         conn.commit()
 
     # ------- OPENS REQUEST CHANNEL FOR REQUESTS
-    @commands.command(
-            name="openrequests",
-            brief="Open requests for users"
-            )
+    @commands.command(name="openrequests", brief="Open requests for users")
     @commands.has_permissions(kick_members=True)
     async def open_requests(self, ctx, *, theme: str = ""):
         """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""  # noqa: E501
@@ -887,10 +903,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send("Requests are now open", delete_after=5)
 
     # ------- OPENS POLL CHANNEL AND MAKES POLL
-    @commands.command(
-            name="openpoll",
-            brief="Open polls for users"
-            )
+    @commands.command(name="openpoll", brief="Open polls for users")
     @commands.has_permissions(kick_members=True)
     async def open_poll(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
@@ -920,10 +933,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send("Polls are now open!")
 
     # -------- REMOVE ITEM FROM POLL --------
-    @commands.command(
-            name="remove",
-            brief="Remove poll item"
-            )
+    @commands.command(name="remove", brief="Remove poll item")
     @commands.has_permissions(kick_members=True)
     async def remove_poll_item(self, ctx, anime_id: str):
         """Remove an item from the poll db using the anime anilist id number"""
@@ -946,10 +956,7 @@ class polls_group(commands.Cog, name='Polls'):
             await ctx.send("Invalid ID. Please enter a numeric ID.")
 
     # ------- SET CHANNEL POLLS ARE MADE IN
-    @commands.command(
-            name="setpollchannel",
-            brief="Change the poll channel"
-            )
+    @commands.command(name="setpollchannel", brief="Change the poll channel")
     @commands.has_permissions(administrator=True)
     async def set_poll_channel(self, ctx):
         """Sets the poll channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
@@ -965,10 +972,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send(f"Poll channel set to <#{POLL_CHANNEL_ID}>")
 
     # ------- SET CHANNEL REQUESTS ARE MADE IN
-    @commands.command(
-            name="setrequestchannel",
-            brief="Change the request channel"
-            )
+    @commands.command(name="setrequestchannel", brief="Change the request channel")  # noqa: E501
     @commands.has_permissions(administrator=True)
     async def set_request_channel(self, ctx):
         """Sets the request channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
@@ -984,20 +988,14 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send(f"Request channel set to <#{REQUEST_CHANNEL_ID}>")
 
     # ------- SHOWS REQUEST AND POLL CHANNELS
-    @commands.command(
-            name="viewchannels",
-            brief="View poll/request channels"
-    )
+    @commands.command(name="viewchannels", brief="View poll/request channels")
     @commands.has_permissions(kick_members=True)
     async def view_channels(self, ctx):
         """Displays the channels used for the polls and requests"""
         await ctx.send(f"Poll channel: <#{POLL_CHANNEL_ID}>\nRequest channel: <#{REQUEST_CHANNEL_ID}>")  # noqa: E501
 
     # ------- SETS USER PERMS FOR POLL CHANNELS
-    @commands.command(
-        name="setuserrole",
-        brief="Change the user role"
-    )
+    @commands.command(name="setuserrole", brief="Change the user role")
     @commands.has_permissions(administrator=True)
     async def set_user_role(self, ctx, *, role_name: str):
         """Change the user role that gets modified for viewing the polls and adding requests"""  # noqa: E501
@@ -1018,8 +1016,68 @@ class polls_group(commands.Cog, name='Polls'):
         """, (USER_ROLE_ID, "USER_ROLE_ID"))
         conn.commit()
 
+    # --------- AUTO POPULATE POLL LIST
+    @commands.command(name="randompoll", brief="Auto populate poll list")
+    @is_owner()
+    async def random_poll(self, ctx, num_items: int = 5):
+        """Automatically populates the poll list with random anime from AniList"""  # noqa: E501
 
-# roups regarding emote manipulation
+        await ctx.send(f"Populating poll list with {num_items} random anime...")  # noqa: E501
+
+        start_time = time.perf_counter()
+
+        rand_ids = []
+
+        max_id = get_max_anime_id()
+        print(f"Max anime ID from AniList: {max_id}")
+
+        for i in range(num_items):
+            rand_anime_id = random.randint(1, max_id)
+
+            print(f"Generated random ID: {rand_anime_id}")
+            # Ensure unique IDs
+            while rand_anime_id in rand_ids:
+                rand_anime_id = random.randint(1, max_id)
+                print("Found duplicate ID, generating a new one...")
+
+            rand_ids.append(rand_anime_id)
+
+        for anime_id in rand_ids:
+            # Search for anime by ID
+            rand_anime = search_anime_by_id(anime_id)
+            while rand_anime is None or isinstance(rand_anime, str):
+                print("No anime found, trying again...")
+                # Ensure unique IDs
+                while True:
+                    print("Generating new ID...")
+                    anime_id = random.randint(1, max_id)
+
+                    if anime_id not in rand_ids:
+                        break
+
+                rand_anime = search_anime_by_id(anime_id)
+
+            # If valid anime found, add to poll list
+            if isinstance(rand_anime, dict):
+                title = (
+                    rand_anime["title"].get("english")
+                    or rand_anime["title"].get("romaji")
+                    or "Unknown"
+                )
+                print(title)
+                await add_poll_item(
+                    None,
+                    title,
+                    rand_anime["id"],
+                    rand_anime.get("coverImage", {}).get("medium", "")
+                )
+
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        await ctx.send(f"Poll list populated with {num_items} random anime in {elapsed_time:.2f} seconds.")  # noqa: E501
+
+
+# groups regarding emote manipulation
 class emote_group(commands.Cog, name='Emotes'):
     def __init__(self, bot):
         self.bot = bot
