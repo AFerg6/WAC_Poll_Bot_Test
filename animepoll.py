@@ -807,12 +807,12 @@ class polls_group(commands.Cog, name='Polls'):
         first = [["dummy", 0, ""]]
         second = [["dummy2", 0, ""]]
 
-        channel = ctx.channel
+        # channel = ctx.channel
 
         # Iterates through all items in poll_messages
         for title, cover_url, message_id, emote in poll_list:
             try:
-                message = await channel.fetch_message(message_id)
+                message = await poll_channel.fetch_message(message_id)
             except discord.NotFound:
                 continue  # Skip if message was deleted
 
