@@ -1226,6 +1226,42 @@ async def anime_night_set_room(ctx, *, room: str):
     conn.commit()
 
 
+@bot.command(name="viewdatabase", brief="Sends the database file")
+@is_owner()
+async def view_database(ctx):
+    print("Sending database file...")
+    try:
+        await ctx.send("Here's the database file:", file=discord.File("botdata.db"))  # noqa: E501
+    except Exception as e:
+        print(f"Error sending database file: {e}")
+        await ctx.send("Error sending database file.")
+
+
+@bot.command(name="uploaddatabase", brief="Upload a new database file")
+@is_owner()
+async def upload_database(ctx):
+    """Upload a new database file to replace the current one."""
+    if not ctx.message.attachments:
+        await ctx.send("Please attach a database file to upload.")
+        return
+
+    attachment = ctx.message.attachments[0]
+    if not attachment.filename.endswith(".db"):
+        await ctx.send("Please upload a valid .db file.")
+        return
+
+    try:
+        # Download the file
+        await attachment.save("botdata.db")
+        await ctx.send("Database file uploaded successfully. Restarting bot...")   # noqa: E501
+
+        # Restart the bot
+        await bot.close()  # cleanly close the bot to allow restart
+    except Exception as e:
+        print(f"Error uploading database file: {e}")
+        await ctx.send("Failed to upload the database file.")
+
+
 async def main():
     await bot.add_cog(polls_group(bot))
     await bot.add_cog(emote_group(bot))
