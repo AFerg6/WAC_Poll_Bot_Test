@@ -272,9 +272,9 @@ def get_emote_items(guild_id: int):
 
 
 # ------- REMOVE ANIME FROM POLL DB
-def remove_poll_item_from_db(anime_id: int):
-    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ?",
-                   (anime_id,)
+def remove_poll_item_from_db(ctx, anime_id: int):
+    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ? AND guild_id = ?",  # noqa: E501
+                   (anime_id, ctx.guild.id)
                    )
     result = cursor.fetchone()
 
@@ -282,8 +282,9 @@ def remove_poll_item_from_db(anime_id: int):
         return None  # No match found
 
     anime_name = result[0]
-    cursor.execute("DELETE FROM poll_items WHERE anime_id = ?",
-                   (anime_id,))
+    cursor.execute("DELETE FROM poll_items WHERE anime_id = ? AND guild_id = ?",  # noqa: E501
+                   (anime_id, ctx.guild.id)
+                   )
     conn.commit()
     return anime_name
 
@@ -293,12 +294,16 @@ async def create_poll_in_channel(channel: int):
     global custom_id_counter
 
     # Get items used in the poll
-    cursor.execute("SELECT title FROM poll_items")
+    cursor.execute("SELECT title FROM poll_items WHERE guild_id = ?", (channel.guild.id,))  # noqa: E501
     poll_list = cursor.fetchall()
     titles = [row[0] for row in poll_list]
 
+    if len(titles) == 0:
+        await channel.send("There are no items to make the poll")
+        return
+
     # Grab emojis from the database
-    emotes = get_emote_items()
+    emotes = get_emote_items(channel.guild.id)
 
     # Reset custom id counter
     custom_id_counter = -1
@@ -320,9 +325,11 @@ async def create_poll_in_channel(channel: int):
             cursor.execute("""
         UPDATE poll_items
         SET emote_text = ?, message_id = ?
-        WHERE title = ?
-    """, (emote, sent_message.id, title))
+        WHERE title = ? AND guild_id = ?
+    """, (emote, sent_message.id, title, channel.guild.id))
             conn.commit()
+
+    await channel.send("Polls are now open!")
 
 
 # ---------- EMBED BUILDER ----------
@@ -721,10 +728,13 @@ def extract_emoji_id(emote_str):
 # --------- VALIDATE EMOTE CAN BE USED BY THE BOT
 async def validate_emote(ctx, emote: str):
     emoji_id = extract_emoji_id(emote)
+
+    # Checks for valid format
     if not emoji_id:
         await ctx.send("Invalid emote format. Please use a custom Discord emoji.")  # noqa: E501
         return False
 
+    # Checks if the emoji is from a server the bot is in
     emoji = bot.get_emoji(emoji_id)
     if emoji is None:
         await ctx.send("Emoji not found or not from a server the bot is in.")
@@ -749,6 +759,11 @@ def get_max_anime_id():
     data = response.json()
 
     return data['data']['Page']['media'][0]['id']
+
+
+def get_poll_items(ctx):
+    cursor.execute("SELECT title, anime_id FROM poll_items WHERE guild_id = ? ORDER BY title ASC", (ctx.guild.id,))  # noqa: E501
+    return cursor.fetchall()
 
 
 # group for commands regarding polls
@@ -777,8 +792,7 @@ class polls_group(commands.Cog, name='Polls'):
         # Sends empty list msg if poll list is empty
 
         # Get all poll items
-        cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")   # noqa: E501
-        poll_list = cursor.fetchall()
+        poll_list = get_poll_items(ctx)
 
         if poll_list == []:
             await ctx.send("The poll list is empty")
@@ -801,10 +815,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send("Closing polls...")
 
         # Get all poll items
-        cursor.execute(
-            "SELECT title, cover_url, message_id, emote_text FROM poll_items"
-        )
-        poll_list = cursor.fetchall()
+        poll_list = get_poll_items(ctx)
 
         # Tries to hide both channels
         try:
@@ -942,7 +953,6 @@ class polls_group(commands.Cog, name='Polls'):
 
         # Makes poll in poll channel
         await create_poll_in_channel(poll_channel)
-        await ctx.send("Polls are now open!")
 
     # -------- REMOVE ITEM FROM POLL --------
     @commands.command(name="remove", brief="Remove poll item")
@@ -954,7 +964,7 @@ class polls_group(commands.Cog, name='Polls'):
             anime_id_int = int(anime_id)
 
             # Remove item and get name
-            anime_name = remove_poll_item_from_db(anime_id_int)
+            anime_name = remove_poll_item_from_db(ctx, anime_id_int)
 
             # Anime not in db
             if anime_name is None:
@@ -1068,7 +1078,7 @@ class polls_group(commands.Cog, name='Polls'):
                         break
 
                 rand_anime = search_anime_by_id(anime_id)
-                
+
             # If valid anime found, add to poll list
             if isinstance(rand_anime, dict):
                 title = (
@@ -1113,6 +1123,9 @@ class emote_group(commands.Cog, name='Emotes'):
     async def remove_emote(self, ctx, emote: str):
         """Remove an emote from the list of emotes used for poll reactions"""
 
+        if not await validate_emote(ctx, emote):
+            return
+
         try:
             remove_emote_item(emote, ctx.guild.id)
             await ctx.send(f"Emoji {emote} removed from the database.")
@@ -1126,6 +1139,8 @@ class emote_group(commands.Cog, name='Emotes'):
     async def add_emote(self, ctx, emote: str):
         """Add an emote to the list of emotes used for poll reactions"""
 
+        if not await validate_emote(ctx, emote):
+            return
         try:
             add_emote_item(emote, ctx.guild.id)
             await ctx.send(f"Emoji {emote} added to the database for this server")  # noqa: E501
