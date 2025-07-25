@@ -100,19 +100,30 @@ ORIGINAL_EMOTES = [
 # Make poll item table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS poll_items (
-    anime_id INTEGER PRIMARY KEY,
-    title TEXT NOT NULL UNIQUE,
+    guild_id INTEGER NOT NULL,
+    anime_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
     cover_url TEXT,
     message_id INTEGER,
-    emote_text TEXT
+    emote_text TEXT,
+    PRIMARY KEY (guild_id, anime_id),
+    UNIQUE (guild_id, title)
 );
 ''')
 
 # Make emote table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS reaction_emotes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     emote_text TEXT NOT NULL UNIQUE
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS emote_guilds (
+    emote_text TEXT NOT NULL,
+    guild_id INTEGER NOT NULL,
+    PRIMARY KEY (emote_text, guild_id),
+    FOREIGN KEY (emote_text) REFERENCES reaction_emotes(emote_text)
 )
 ''')
 
@@ -221,41 +232,41 @@ async def on_message(message):
 
 
 # ------- ADD ITEM TO POLL DB
-async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = ""):
+async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = "", visible: bool = False):  # noqa: E501
     try:
         cursor.execute(
-            "INSERT INTO poll_items (anime_id, title, cover_url) "
-            "VALUES (?, ?, ?)",
-            (anime_id, title, cover_url)
+            "INSERT INTO poll_items (guild_id, anime_id, title, cover_url) "
+            "VALUES (?, ?, ?, ?)",
+            (ctx.guild.id, anime_id, title, cover_url)
         )
         conn.commit()
 
-        if ctx:
+        if visible:
             await ctx.send(f"Added **{title}** to the poll list.")
     except sqlite3.IntegrityError:
-        if ctx:
+        if visible:
             await ctx.send(f"**{title}** is already in the poll list.")
 
 
 # ------- ADD EMOTE TO DB
-def add_emote_item(emote: str):
-    cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)",
-                   (emote,)
-                   )
+def add_emote_item(emote: str, guild_id: int):
+    cursor.execute("INSERT OR IGNORE INTO reaction_emotes (emote_text) VALUES (?)", (emote,))  # noqa: E501
+    cursor.execute("INSERT INTO emote_guilds (emote_text, guild_id) VALUES (?, ?)", (emote, guild_id))  # noqa: E501
     conn.commit()
 
 
 # ------- REMOVE EMOTE FROM DB
-def remove_emote_item(emote: str):
-    cursor.execute("DELETE FROM reaction_emotes WHERE emote_text = ?",
-                   (emote,)
-                   )
+def remove_emote_item(emote: str, guild_id: int):
+    cursor.execute("DELETE FROM emote_guilds WHERE emote_text = ? AND guild_id = ?", (emote, guild_id))  # noqa: E501
     conn.commit()
 
 
-# ------- FRETRIEVE EMOTES FROM DB
-def get_emote_items():
-    cursor.execute("SELECT emote_text FROM reaction_emotes ORDER BY id ASC")
+# ------- RETRIEVE EMOTES FROM DB
+def get_emote_items(guild_id: int):
+    cursor.execute(
+        "SELECT emote_text FROM emote_guilds WHERE guild_id = ? ORDER BY emote_text ASC",  # noqa: E501
+        (guild_id,)
+    )
     emotes = [row[0] for row in cursor.fetchall()]
     return emotes
 
@@ -527,7 +538,7 @@ async def anime(ctx, *, anime_name: str):
 
         # Add anime with custom title and new id num to db
         custom_title = anime_name.strip()
-        await add_poll_item(ctx, custom_title, custom_id_counter)
+        await add_poll_item(ctx, custom_title, custom_id_counter, "", visible=True)  # noqa: E501
         custom_id_counter -= 1
         cursor.execute(
             """UPDATE settings SET value = ? WHERE setting = ? """,
@@ -650,7 +661,8 @@ async def on_reaction_add(reaction, user):
             reaction.message.channel,
             title_en,
             anime_id,
-            cover_url
+            cover_url,
+            visible=True
             )
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
@@ -1056,7 +1068,7 @@ class polls_group(commands.Cog, name='Polls'):
                         break
 
                 rand_anime = search_anime_by_id(anime_id)
-
+                
             # If valid anime found, add to poll list
             if isinstance(rand_anime, dict):
                 title = (
@@ -1066,7 +1078,7 @@ class polls_group(commands.Cog, name='Polls'):
                 )
                 print(title)
                 await add_poll_item(
-                    None,
+                    ctx,
                     title,
                     rand_anime["id"],
                     rand_anime.get("coverImage", {}).get("medium", "")
@@ -1087,7 +1099,7 @@ class emote_group(commands.Cog, name='Emotes'):
     @commands.has_permissions(kick_members=True)
     async def view_emotes(self, ctx):
         """Displays a full list of the emotes used for poll votes"""
-        emotes = get_emote_items()
+        emotes = get_emote_items(ctx.guild.id)
 
         # Send emotes in groups of 10 per message
         chunk_size = 10
@@ -1102,7 +1114,7 @@ class emote_group(commands.Cog, name='Emotes'):
         """Remove an emote from the list of emotes used for poll reactions"""
 
         try:
-            remove_emote_item(emote)
+            remove_emote_item(emote, ctx.guild.id)
             await ctx.send(f"Emoji {emote} removed from the database.")
         except Exception as e:
             await ctx.send(f"Emoji {emote} not found in the database.")
@@ -1114,13 +1126,13 @@ class emote_group(commands.Cog, name='Emotes'):
     async def add_emote(self, ctx, emote: str):
         """Add an emote to the list of emotes used for poll reactions"""
 
-        # If emote valid add to db
-        if await validate_emote(self, ctx, emote):
-            try:
-                add_emote_item(emote)
-                await ctx.send(f"Emoji {emote} added to the emoji list!")
-            except Exception as e:
-                await ctx.send(f"Failed to add emoji: {e}")
+        try:
+            add_emote_item(emote, ctx.guild.id)
+            await ctx.send(f"Emoji {emote} added to the database for this server")  # noqa: E501
+
+        # Dupe catching for server emote list
+        except sqlite3.IntegrityError as e:
+            print(f"Failed to insert: {e}")
 
 
 # #updates the bot on command hopefully
@@ -1151,6 +1163,21 @@ async def update_bot(ctx):
     # Restart the bot
     await ctx.send("Restarting bot now...")
     await bot.close()  # cleanly close the bot to allow restart
+
+
+@bot.command(name="initializeserver", brief="Initialize the bot in a server")
+@commands.has_permissions(administrator=True)
+async def initialize_server(ctx):
+    """Initializes the bot in a server by setting up the necessary settings"""
+
+    await ctx.send("Bot initialized with default settings.")
+
+    await ctx.send("Adding default emotes")
+    for emote in ORIGINAL_EMOTES:
+        add_emote_item(emote, ctx.guild.id)
+    await ctx.send("Added default emotes")
+
+    await ctx.send("Please configure the poll channel, request channel, and user role using the respective commands.")  # noqa: E501
 
 
 @bot.command(name="hi", brief="hi")
