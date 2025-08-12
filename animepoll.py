@@ -47,6 +47,10 @@ class GuildSettings:
     def get(self, setting: str, default=None):
         """Get a setting value, return default if not found."""
         return self.settings.get(setting, default)
+    
+    def get_id(self, setting: str, default=None):
+        """Get a setting value, return default if not found."""
+        return int(self.settings.get(setting, default))
 
     def set(self, setting: str, value):
         self.settings[setting] = value
@@ -68,6 +72,9 @@ class GuildSettings:
             """, (self.guild_id, setting, value))  # noqa: E501
             print(f"added {setting} to db\n{self.guild_id, setting, value}")
             conn.commit()
+
+    def all_settings(self):
+        return self.settings
 
 
 # Cache for guild settings
@@ -178,64 +185,6 @@ CREATE TABLE IF NOT EXISTS settings (
 )
 ''')
 
-# # If emote table is empty fill it with predefined list
-# cursor.execute("SELECT COUNT(*) FROM reaction_emotes")
-# count = cursor.fetchone()[0]
-# if count == 0:
-#     print("generating new emote table")
-#     for emote in ORIGINAL_EMOTES:
-#         cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)",
-#                        (emote,)
-#                        )
-#     print("initial emotes loaded to db")
-
-# # If settings is empty fill with predefined settings
-# cursor.execute("SELECT COUNT(*) FROM settings")
-# count = cursor.fetchone()[0]
-# if count == 0:
-#     print("generating default settings")
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("REQUESTS_CHANNEL_ID", REQUEST_CHANNEL_ID)
-#         )
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("POLLS_CHANNEL_ID", POLL_CHANNEL_ID)
-#         )
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("USER_ROLE_ID", USER_ROLE_ID)
-#         )
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("custom_id_counter", custom_id_counter)
-#     )
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("ANIME_NIGHT_DATE", ANIME_NIGHT_DETAILS[0])
-#     )
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("ANIME_NIGHT_TIME", ANIME_NIGHT_DETAILS[1])
-#     )
-#     cursor.execute(
-#         "INSERT INTO settings (setting, value) VALUES (?, ?)",
-#         ("ANIME_NIGHT_ROOM", ANIME_NIGHT_DETAILS[2])
-#     )
-
-# else:
-#     cursor.execute("SELECT setting, value FROM settings")
-#     settings_list = dict(cursor.fetchall())
-#     print("fetching settings")
-#     REQUEST_CHANNEL_ID = int(settings_list["REQUESTS_CHANNEL_ID"])
-#     POLL_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
-#     USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
-#     custom_id_counter = int(settings_list["custom_id_counter"])
-#     ANIME_NIGHT_DETAILS = [
-#         settings_list["ANIME_NIGHT_DATE"],
-#         settings_list["ANIME_NIGHT_TIME"],
-#         settings_list["ANIME_NIGHT_ROOM"]
-#         ]
 
 # load guild objects from the database
 cursor.execute("SELECT DISTINCT guild_id FROM settings")
@@ -356,7 +305,14 @@ async def create_poll_in_channel(channel: int):
     # Reset custom id counter
     server_settings.set("custom_id_counter", -1)
     # Clear local embed cache to free up space
-    ANIME_CACHE.clear()
+    guild_to_remove = 123456789  # example guild id to filter out
+
+    # Iterate over keys to remove in a list
+    keys_to_delete = [msg_id for msg_id, data in ANIME_CACHE.items() if data.get("guild_id") == guild_to_remove]  # noqa: E501
+    poll_list = cursor.fetchall()
+
+    for key in keys_to_delete:
+        del ANIME_CACHE[key]
 
     # Create polls using the extracted anime names
     for idx, title in enumerate(titles):
@@ -648,6 +604,7 @@ async def anime(ctx, *, anime_name: str):
     ANIME_CACHE[msg.id] = {
         "animes": result[:5],
         "user_id": ctx.author.id,
+        "guild_id": ctx.guild.id
     }
 
 
@@ -697,7 +654,7 @@ async def on_reaction_add(reaction, user):
     title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
 
     # Doesnt add item to poll list if not in set request channel
-    if reaction.message.channel.id == server_settings.get("REQUESTS_CHANNEL_ID"):  # noqa: E501
+    if reaction.message.channel.id == server_settings.get_id("REQUESTS_CHANNEL_ID"):  # noqa: E501
         cover_url = (
             chosen.get("coverImage", {}).get("large")
             or chosen.get("coverImage", {}).get("medium")
@@ -815,9 +772,12 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def create_poll(self, ctx):
         """Manually create a poll from the stored requests"""
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+
+        poll_channel_id = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
         # only works in set poll channel
-        if ctx.channel.id != POLL_CHANNEL_ID:
+        if ctx.channel.id != poll_channel_id:
             await ctx.send("Wrong channel")
             return
 
@@ -848,9 +808,9 @@ class polls_group(commands.Cog, name='Polls'):
     async def close_poll(self, ctx):
         """Hides the poll channel from general user role, tally up votes and display the winners"""  # noqa: E501
         server_settings = guild_settings_cache.get(ctx.guild.id)
-        role = ctx.guild.get_role(server_settings.get("USER_ROLE_ID"))  # noqa: E501
-        request_channel = ctx.guild.get_channel(server_settings.get("REQUESTS_CHANNEL_ID"))  # noqa: E501
-        poll_channel = ctx.guild.get_channel(server_settings.get("POLL_CHANNEL_ID"))  # noqa: E501
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))  # noqa: E501
+        request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
         await ctx.send("Closing polls...")
 
@@ -927,9 +887,9 @@ class polls_group(commands.Cog, name='Polls'):
     async def open_requests(self, ctx, *, theme: str = ""):
         """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""  # noqa: E501
         server_settings = guild_settings_cache.get(ctx.guild.id)
-        role = ctx.guild.get_role(server_settings.get("USER_ROLE_ID"))
-        request_channel = ctx.guild.get_channel(server_settings.get("REQUESTS_CHANNEL_ID"))  # noqa: E501
-        poll_channel = ctx.guild.get_channel(server_settings.get("POLL_CHANNEL_ID"))  # noqa: E501
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))
+        request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
     # Checks for set role and request channel
         if role is None:
@@ -972,9 +932,9 @@ class polls_group(commands.Cog, name='Polls'):
     async def open_poll(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
         server_settings = guild_settings_cache.get(ctx.guild.id)
-        role = ctx.guild.get_role(server_settings.get("USER_ROLE_ID"))
-        request_channel = ctx.guild.get_channel(server_settings.get("REQUESTS_CHANNEL_ID"))  # noqa: E501
-        poll_channel = ctx.guild.get_channel(server_settings.get("POLL_CHANNEL_ID"))  # noqa: E501
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))
+        request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
         # Check for channel and user role
         if role is None:
@@ -1045,7 +1005,8 @@ class polls_group(commands.Cog, name='Polls'):
     async def view_channels(self, ctx):
         """Displays the channels used for the polls and requests"""
         server_settings = guild_settings_cache.get(ctx.guild.id)
-        await ctx.send(f"Poll channel: <#{server_settings.get('POLL_CHANNEL_ID')}>\nRequest channel: <#{server_settings.get('REQUESTS_CHANNEL_ID')}>")  # noqa: E501
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))  # noqa: E501
+        await ctx.send(f"Poll channel: <#{server_settings.get_id('POLL_CHANNEL_ID')}>\nRequest channel: <#{server_settings.get_id('REQUESTS_CHANNEL_ID')}>\nUser role: {role.name or "none"}")  # noqa: E501
 
     # ------- SETS USER PERMS FOR POLL CHANNELS
     @commands.command(name="setuserrole", brief="Change the user role")
@@ -1218,7 +1179,7 @@ async def initialize_server(ctx):
     # Setting default values
     print("Adding default settings")
     settings_list.add("REQUESTS_CHANNEL_ID", REQUEST_CHANNEL_ID)
-    settings_list.add("POLLS_CHANNEL_ID", POLL_CHANNEL_ID)
+    settings_list.add("POLL_CHANNEL_ID", POLL_CHANNEL_ID)
     settings_list.add("USER_ROLE_ID", USER_ROLE_ID)
     settings_list.add("ANIME_NIGHT_DATE", "date")
     settings_list.add("ANIME_NIGHT_TIME", "time")
@@ -1328,6 +1289,32 @@ async def upload_database(ctx):
     except Exception as e:
         print(f"Error uploading database file: {e}")
         await ctx.send("Failed to upload the database file.")
+
+
+@bot.command(name="serversettings", brief="View server settings")
+@is_owner()
+async def view_server_settings(ctx):
+    """View the settings for a specific server by its guild ID."""
+    try:
+        guild_id = ctx.guild.id  # Use the current guild ID
+        server_settings = guild_settings_cache.get(guild_id)
+        if not server_settings:
+            await ctx.send(f"No settings found for guild ID {guild_id}.")
+            return
+
+        settings = server_settings.all_settings()
+        if not settings:
+            await ctx.send(f"No settings found for guild ID {guild_id}.")
+            return
+
+        settings_msg = f"**Settings for Guild ID {guild_id}:**\n"
+        for key, value in settings.items():
+            settings_msg += f"- {key}: {value}\n"
+
+        await ctx.send(settings_msg)
+    except Exception as e:
+        print(f"Error retrieving server settings: {e}")
+        await ctx.send("Error retrieving server settings.")
 
 
 async def main():
