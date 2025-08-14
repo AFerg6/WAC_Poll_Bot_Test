@@ -28,9 +28,6 @@ USER_ROLE_ID = 1014624946758098975  # weeb roll id
 OWNER_ID = 453186114916974612  # my user id
 
 # Poll support variables
-################################
-# need to fix anime_cache to only clear per server not globally
-################################
 ANIME_CACHE: dict[int, dict] = {}  # message_id -> list of anime
 
 
@@ -47,7 +44,7 @@ class GuildSettings:
     def get(self, setting: str, default=None):
         """Get a setting value, return default if not found."""
         return self.settings.get(setting, default)
-    
+
     def get_id(self, setting: str, default=None):
         """Get a setting value, return default if not found."""
         return int(self.settings.get(setting, default))
@@ -515,7 +512,7 @@ async def anime(ctx, *, anime_name: str):
     Searches for an anime from anilist and shows the top 5. If in the set request channel adds to the poll list. Otherwise shows anime details.
     """  # noqa: E501
     # global custom_id_counter
-    server_settings = guild_settings_cache.get(ctx.guild.id)
+    # server_settings = guild_settings_cache.get(ctx.guild.id)
     result = search_anime(anime_name)
 
     # If no result found prompt for a custom title
@@ -543,8 +540,8 @@ async def anime(ctx, *, anime_name: str):
 
         # Add anime with custom title and new id num to db
         custom_title = anime_name.strip()
-        await add_poll_item(ctx, custom_title, next_negative_id, "", visible=True)  # noqa: E501
-        server_settings.set("custom_id_counter", next_negative_id)  # noqa: E501
+        await add_poll_item(ctx, custom_title, next_negative_id(ctx), "", visible=True)  # noqa: E501
+        # server_settings.set("custom_id_counter", next_negative_id)  # noqa: E501
         return
 
     # Build embed with top results
@@ -758,7 +755,12 @@ def get_max_anime_id():
 
 
 def get_poll_items(ctx):
-    cursor.execute("SELECT title, anime_id FROM poll_items WHERE guild_id = ? ORDER BY title ASC", (ctx.guild.id,))  # noqa: E501
+    cursor.execute("""
+    SELECT title, cover_url, message_id, emote_text
+    FROM poll_items
+    WHERE guild_id = ?
+    ORDER BY title ASC
+""", (ctx.guild.id,))  # noqa: E501
     return cursor.fetchall()
 
 
@@ -816,7 +818,7 @@ class polls_group(commands.Cog, name='Polls'):
 
         # Get all poll items
         poll_list = get_poll_items(ctx)
-
+        print(f"Poll list: {poll_list}")  # Debugging line
         # Tries to hide both channels
         try:
             await request_channel.set_permissions(role, view_channel=False)
@@ -829,8 +831,6 @@ class polls_group(commands.Cog, name='Polls'):
         # Dummy winners for easy initial comparison
         first = [["dummy", 0, ""]]
         second = [["dummy2", 0, ""]]
-
-        # channel = ctx.channel
 
         # Iterates through all items in poll_messages
         for title, cover_url, message_id, emote in poll_list:
