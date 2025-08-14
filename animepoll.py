@@ -1262,6 +1262,29 @@ async def upload_database(ctx):
         await ctx.send("Failed to upload the database file.")
 
 
+@bot.command(name="cleardb", brief="Deletes all DB data")
+@is_owner()
+async def clear_db(ctx):
+    """Clears all data from the database. Used for changing database when updating"""   # noqa: E501
+    try:
+
+        # Get all table names
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence';")   # noqa: E501
+        tables = cursor.fetchall()
+
+        for table_name in tables:
+            table = table_name[0]
+            # cursor.execute(f"DELETE FROM {table}")  # Clear table
+            # Alternatively, to drop tables completely:
+            cursor.execute(f"DROP TABLE {table}")
+
+        conn.commit()
+        conn.close()
+        await ctx.send("All tables have been cleared successfully!")
+    except Exception as e:
+        await ctx.send(f"Error clearing database: {e}")
+
+
 async def main():
     await bot.add_cog(polls_group(bot))
     await bot.add_cog(emote_group(bot))
