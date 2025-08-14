@@ -47,15 +47,16 @@ class GuildSettings:
 
     def get_id(self, setting: str, default=None):
         """Get a setting value, return default if not found."""
-        return int(self.settings.get(setting, default))
+        val = self.settings.get(setting, default)
+        return int(val) if val is not None else default
 
     def set(self, setting: str, value):
         self.settings[setting] = value
         cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE guild_id = ? AND setting = ?
-        """, (value, self.guild_id, setting))
+    INSERT INTO settings (guild_id, setting, value)
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id, setting) DO UPDATE SET value = excluded.value
+""", (self.guild_id, setting, value))
         conn.commit()
 
     def add(self, setting: str, value):
@@ -193,13 +194,14 @@ for guild in guild_ids:
 conn.commit()
 
 
-# command decorator to check if the user is the owner(me)
+# Command decorator to check if the user is the owner(me)
 def is_owner():
     def predicate(ctx):
         return ctx.author.id == OWNER_ID
     return commands.check(predicate)
 
 
+# Command decorator to disable a command for a specific person
 def not_user(user_id):
     def predicate(ctx):
         return ctx.author.id != user_id
@@ -284,9 +286,7 @@ def remove_poll_item_from_db(ctx, anime_id: int):
 
 
 # ------- POLL GENERATOR
-async def create_poll_in_channel(channel: int):
-    server_settings = guild_settings_cache.get(channel.guild.id)
-
+async def create_poll_in_channel(channel: discord.TextChannel):
     # Get items used in the poll
     cursor.execute("SELECT title FROM poll_items WHERE guild_id = ?", (channel.guild.id,))  # noqa: E501
     poll_list = cursor.fetchall()
@@ -299,14 +299,10 @@ async def create_poll_in_channel(channel: int):
     # Grab emojis from the database
     emotes = get_emote_items(channel.guild.id)
 
-    # Reset custom id counter
-    server_settings.set("custom_id_counter", -1)
     # Clear local embed cache to free up space
-    guild_to_remove = 123456789  # example guild id to filter out
 
     # Iterate over keys to remove in a list
-    keys_to_delete = [msg_id for msg_id, data in ANIME_CACHE.items() if data.get("guild_id") == guild_to_remove]  # noqa: E501
-    poll_list = cursor.fetchall()
+    keys_to_delete = [msg_id for msg_id, data in ANIME_CACHE.items() if data.get("guild_id") == channel.guild.id]  # noqa: E501
 
     for key in keys_to_delete:
         del ANIME_CACHE[key]
@@ -756,7 +752,7 @@ def get_max_anime_id():
 
 def get_poll_items(ctx):
     cursor.execute("""
-    SELECT title, cover_url, message_id, emote_text
+    SELECT anime_id, title, cover_url, message_id, emote_text
     FROM poll_items
     WHERE guild_id = ?
     ORDER BY title ASC
@@ -1006,7 +1002,7 @@ class polls_group(commands.Cog, name='Polls'):
         """Displays the channels used for the polls and requests"""
         server_settings = guild_settings_cache.get(ctx.guild.id)
         role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))  # noqa: E501
-        await ctx.send(f"Poll channel: <#{server_settings.get_id('POLL_CHANNEL_ID')}>\nRequest channel: <#{server_settings.get_id('REQUESTS_CHANNEL_ID')}>\nUser role: {role.name or "none"}")  # noqa: E501
+        await ctx.send(f"Poll channel: <#{server_settings.get_id('POLL_CHANNEL_ID')}>\nRequest channel: <#{server_settings.get_id('REQUESTS_CHANNEL_ID')}>\nUser role: {role.name if role else 'none'}")  # noqa: E501
 
     # ------- SETS USER PERMS FOR POLL CHANNELS
     @commands.command(name="setuserrole", brief="Change the user role")
