@@ -790,13 +790,15 @@ class polls_group(commands.Cog, name='Polls'):
 
         # Get all poll items
         poll_list = get_poll_items(ctx)
+        print(f"Poll list: {poll_list}")  # Debugging line
 
         if poll_list == []:
             await ctx.send("The poll list is empty")
             return
 
         # Prints all items in poll sorted alphabetically
-        for title, anime_id in poll_list:
+        for anime_id, title, *_ in poll_list:
+            print(f"{title} ({anime_id})")  # Debugging line
             await ctx.send(f"{title} ({anime_id})")
         await ctx.send("End of poll")
 
@@ -1183,9 +1185,12 @@ async def initialize_server(ctx):
     await ctx.send("Default settings added")
 
     await ctx.send("Adding default emotes")
-    for emote in ORIGINAL_EMOTES:
-        add_emote_item(emote, ctx.guild.id)
-    print("Added default emotes")
+    try:
+        for emote in ORIGINAL_EMOTES:
+            add_emote_item(emote, ctx.guild.id)
+        await ctx.send("Added default emotes")
+    except Exception as e:
+        await ctx.send(f"Error adding default emotes: {e}")
 
     # await ctx.send("Please configure the poll channel, request channel, and user role using the respective commands.")  # noqa: E501
 
