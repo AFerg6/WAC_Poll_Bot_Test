@@ -29,9 +29,55 @@ OWNER_ID = 453186114916974612  # my user id
 
 # Poll support variables
 ANIME_CACHE: dict[int, dict] = {}  # message_id -> list of anime
-custom_id_counter = -1
 
-ANIME_NIGHT_DETAILS = ["Friday", "6-9pm", "SEB 2202"]
+
+class GuildSettings:
+    def __init__(self, guild_id: int):
+        self.guild_id = guild_id
+        self.settings = {}
+        self.load_settings()
+
+    def load_settings(self):
+        cursor.execute("SELECT setting, value FROM settings WHERE guild_id = ?", (self.guild_id,))  # noqa: E501
+        self.settings = {setting: value for setting, value in cursor.fetchall()}  # noqa: E501
+
+    def get(self, setting: str, default=None):
+        """Get a setting value, return default if not found."""
+        return self.settings.get(setting, default)
+
+    def get_id(self, setting: str, default=None):
+        """Get a setting value, return default if not found."""
+        val = self.settings.get(setting, default)
+        return int(val) if val is not None else default
+
+    def set(self, setting: str, value):
+        self.settings[setting] = value
+        cursor.execute("""
+    INSERT INTO settings (guild_id, setting, value)
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id, setting) DO UPDATE SET value = excluded.value
+""", (self.guild_id, setting, value))
+        conn.commit()
+
+    def add(self, setting: str, value):
+        if setting not in self.settings:
+            print("adding setting to dict")
+            self.settings[setting] = value
+            print(f"adding {setting} to db\n{self.guild_id, setting, value}")
+            cursor.execute("""
+                INSERT INTO settings (guild_id, setting, value)
+                VALUES (?, ?, ?)
+            """, (self.guild_id, setting, value))  # noqa: E501
+            print(f"added {setting} to db\n{self.guild_id, setting, value}")
+            conn.commit()
+
+    def all_settings(self):
+        return self.settings
+
+
+# Cache for guild settings
+guild_settings_cache: dict[int, GuildSettings] = {}
+
 
 # List of emotes for voting
 ORIGINAL_EMOTES = [
@@ -100,101 +146,62 @@ ORIGINAL_EMOTES = [
 # Make poll item table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS poll_items (
-    anime_id INTEGER PRIMARY KEY,
-    title TEXT NOT NULL UNIQUE,
+    guild_id INTEGER NOT NULL,
+    anime_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
     cover_url TEXT,
     message_id INTEGER,
-    emote_text TEXT
+    emote_text TEXT,
+    PRIMARY KEY (guild_id, anime_id),
+    UNIQUE (guild_id, title)
 );
 ''')
 
 # Make emote table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS reaction_emotes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     emote_text TEXT NOT NULL UNIQUE
+)
+''')
+
+# Make emote guilds table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS emote_guilds (
+    emote_text TEXT NOT NULL,
+    guild_id INTEGER NOT NULL,
+    PRIMARY KEY (emote_text, guild_id),
+    FOREIGN KEY (emote_text) REFERENCES reaction_emotes(emote_text)
 )
 ''')
 
 # Make settings table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS settings (
-               setting TEXT UNIQUE,
-               value
+               guild_id INTEGER NOT NULL,
+               setting TEXT NOT NULL,
+               value TEXT NOT NULL
 )
 ''')
 
-# If emote table is empty fill it with predefined list
-cursor.execute("SELECT COUNT(*) FROM reaction_emotes")
-count = cursor.fetchone()[0]
-if count == 0:
-    print("generating new emote table")
-    for emote in ORIGINAL_EMOTES:
-        cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)",
-                       (emote,)
-                       )
-    print("initial emotes loaded to db")
 
-# If settings is empty fill with predefined settings
-cursor.execute("SELECT COUNT(*) FROM settings")
-count = cursor.fetchone()[0]
-if count == 0:
-    print("generating default settings")
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("REQUESTS_CHANNEL_ID", REQUEST_CHANNEL_ID)
-        )
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("POLLS_CHANNEL_ID", POLL_CHANNEL_ID)
-        )
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("USER_ROLE_ID", USER_ROLE_ID)
-        )
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("custom_id_counter", custom_id_counter)
-    )
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("ANIME_NIGHT_DATE", ANIME_NIGHT_DETAILS[0])
-    )
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("ANIME_NIGHT_TIME", ANIME_NIGHT_DETAILS[1])
-    )
-    cursor.execute(
-        "INSERT INTO settings (setting, value) VALUES (?, ?)",
-        ("ANIME_NIGHT_ROOM", ANIME_NIGHT_DETAILS[2])
-    )
-
-else:
-    cursor.execute("SELECT setting, value FROM settings")
-    settings_list = dict(cursor.fetchall())
-    print("fetching settings")
-    REQUEST_CHANNEL_ID = int(settings_list["REQUESTS_CHANNEL_ID"])
-    POLL_CHANNEL_ID = int(settings_list["POLLS_CHANNEL_ID"])
-    USER_ROLE_ID = int(settings_list["USER_ROLE_ID"])
-    custom_id_counter = int(settings_list["custom_id_counter"])
-    ANIME_NIGHT_DETAILS = [
-        settings_list["ANIME_NIGHT_DATE"],
-        settings_list["ANIME_NIGHT_TIME"],
-        settings_list["ANIME_NIGHT_ROOM"]
-        ]
-
+# load guild objects from the database
+cursor.execute("SELECT DISTINCT guild_id FROM settings")
+guild_ids = [row[0] for row in cursor.fetchall()]
+for guild in guild_ids:
+    guild_settings_cache[guild] = GuildSettings(guild)
 
 # Update table with writen data
 conn.commit()
 
 
-# command decorator to check if the user is the owner(me)
+# Command decorator to check if the user is the owner(me)
 def is_owner():
     def predicate(ctx):
         return ctx.author.id == OWNER_ID
     return commands.check(predicate)
 
 
+# Command decorator to disable a command for a specific person
 def not_user(user_id):
     def predicate(ctx):
         return ctx.author.id != user_id
@@ -221,49 +228,49 @@ async def on_message(message):
 
 
 # ------- ADD ITEM TO POLL DB
-async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = ""):
+async def add_poll_item(ctx, title: str, anime_id: int, cover_url: str = "", visible: bool = False):  # noqa: E501
     try:
         cursor.execute(
-            "INSERT INTO poll_items (anime_id, title, cover_url) "
-            "VALUES (?, ?, ?)",
-            (anime_id, title, cover_url)
+            "INSERT INTO poll_items (guild_id, anime_id, title, cover_url) "
+            "VALUES (?, ?, ?, ?)",
+            (ctx.guild.id, anime_id, title, cover_url)
         )
         conn.commit()
 
-        if ctx:
+        if visible:
             await ctx.send(f"Added **{title}** to the poll list.")
     except sqlite3.IntegrityError:
-        if ctx:
+        if visible:
             await ctx.send(f"**{title}** is already in the poll list.")
 
 
 # ------- ADD EMOTE TO DB
-def add_emote_item(emote: str):
-    cursor.execute("INSERT INTO reaction_emotes (emote_text) VALUES (?)",
-                   (emote,)
-                   )
+def add_emote_item(emote: str, guild_id: int):
+    cursor.execute("INSERT OR IGNORE INTO reaction_emotes (emote_text) VALUES (?)", (emote,))  # noqa: E501
+    cursor.execute("INSERT INTO emote_guilds (emote_text, guild_id) VALUES (?, ?)", (emote, guild_id))  # noqa: E501
     conn.commit()
 
 
 # ------- REMOVE EMOTE FROM DB
-def remove_emote_item(emote: str):
-    cursor.execute("DELETE FROM reaction_emotes WHERE emote_text = ?",
-                   (emote,)
-                   )
+def remove_emote_item(emote: str, guild_id: int):
+    cursor.execute("DELETE FROM emote_guilds WHERE emote_text = ? AND guild_id = ?", (emote, guild_id))  # noqa: E501
     conn.commit()
 
 
-# ------- FRETRIEVE EMOTES FROM DB
-def get_emote_items():
-    cursor.execute("SELECT emote_text FROM reaction_emotes ORDER BY id ASC")
+# ------- RETRIEVE EMOTES FROM DB
+def get_emote_items(guild_id: int):
+    cursor.execute(
+        "SELECT emote_text FROM emote_guilds WHERE guild_id = ? ORDER BY emote_text ASC",  # noqa: E501
+        (guild_id,)
+    )
     emotes = [row[0] for row in cursor.fetchall()]
     return emotes
 
 
 # ------- REMOVE ANIME FROM POLL DB
-def remove_poll_item_from_db(anime_id: int):
-    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ?",
-                   (anime_id,)
+def remove_poll_item_from_db(ctx, anime_id: int):
+    cursor.execute("SELECT title FROM poll_items WHERE anime_id = ? AND guild_id = ?",  # noqa: E501
+                   (anime_id, ctx.guild.id)
                    )
     result = cursor.fetchone()
 
@@ -271,34 +278,34 @@ def remove_poll_item_from_db(anime_id: int):
         return None  # No match found
 
     anime_name = result[0]
-    cursor.execute("DELETE FROM poll_items WHERE anime_id = ?",
-                   (anime_id,))
+    cursor.execute("DELETE FROM poll_items WHERE anime_id = ? AND guild_id = ?",  # noqa: E501
+                   (anime_id, ctx.guild.id)
+                   )
     conn.commit()
     return anime_name
 
 
 # ------- POLL GENERATOR
-async def create_poll_in_channel(channel: int):
-    global custom_id_counter
-
+async def create_poll_in_channel(channel: discord.TextChannel):
     # Get items used in the poll
-    cursor.execute("SELECT title FROM poll_items")
+    cursor.execute("SELECT title FROM poll_items WHERE guild_id = ?", (channel.guild.id,))  # noqa: E501
     poll_list = cursor.fetchall()
     titles = [row[0] for row in poll_list]
 
-    # Grab emojis from the database
-    emotes = get_emote_items()
+    if len(titles) == 0:
+        await channel.send("There are no items to make the poll")
+        return
 
-    # Reset custom id counter
-    custom_id_counter = -1
-    cursor.execute("""UPDATE settings SET value = ? WHERE setting = ? """,
-                   (custom_id_counter,
-                    "custom_id_counter")
-                   )
-    conn.commit()
+    # Grab emojis from the database
+    emotes = get_emote_items(channel.guild.id)
 
     # Clear local embed cache to free up space
-    ANIME_CACHE.clear()
+
+    # Iterate over keys to remove in a list
+    keys_to_delete = [msg_id for msg_id, data in ANIME_CACHE.items() if data.get("guild_id") == channel.guild.id]  # noqa: E501
+
+    for key in keys_to_delete:
+        del ANIME_CACHE[key]
 
     # Create polls using the extracted anime names
     for idx, title in enumerate(titles):
@@ -309,9 +316,11 @@ async def create_poll_in_channel(channel: int):
             cursor.execute("""
         UPDATE poll_items
         SET emote_text = ?, message_id = ?
-        WHERE title = ?
-    """, (emote, sent_message.id, title))
+        WHERE title = ? AND guild_id = ?
+    """, (emote, sent_message.id, title, channel.guild.id))
             conn.commit()
+
+    await channel.send("Polls are now open!")
 
 
 # ---------- EMBED BUILDER ----------
@@ -498,8 +507,8 @@ async def anime(ctx, *, anime_name: str):
     """
     Searches for an anime from anilist and shows the top 5. If in the set request channel adds to the poll list. Otherwise shows anime details.
     """  # noqa: E501
-    global custom_id_counter
-
+    # global custom_id_counter
+    # server_settings = guild_settings_cache.get(ctx.guild.id)
     result = search_anime(anime_name)
 
     # If no result found prompt for a custom title
@@ -527,13 +536,8 @@ async def anime(ctx, *, anime_name: str):
 
         # Add anime with custom title and new id num to db
         custom_title = anime_name.strip()
-        await add_poll_item(ctx, custom_title, custom_id_counter)
-        custom_id_counter -= 1
-        cursor.execute(
-            """UPDATE settings SET value = ? WHERE setting = ? """,
-            (custom_id_counter, "custom_id_counter")
-            )
-        conn.commit()
+        await add_poll_item(ctx, custom_title, next_negative_id(ctx), "", visible=True)  # noqa: E501
+        # server_settings.set("custom_id_counter", next_negative_id)  # noqa: E501
         return
 
     # Build embed with top results
@@ -593,12 +597,15 @@ async def anime(ctx, *, anime_name: str):
     ANIME_CACHE[msg.id] = {
         "animes": result[:5],
         "user_id": ctx.author.id,
+        "guild_id": ctx.guild.id
     }
 
 
 # ----- REACTION HANDLER  (SELECTION / CANCEL) -------
 @bot.event
 async def on_reaction_add(reaction, user):
+    server_settings = guild_settings_cache.get(reaction.message.guild.id)
+
     # Ignore bot reactions
     if user.bot:
         return
@@ -640,7 +647,7 @@ async def on_reaction_add(reaction, user):
     title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
 
     # Doesnt add item to poll list if not in set request channel
-    if reaction.message.channel.id == REQUEST_CHANNEL_ID:
+    if reaction.message.channel.id == server_settings.get_id("REQUESTS_CHANNEL_ID"):  # noqa: E501
         cover_url = (
             chosen.get("coverImage", {}).get("large")
             or chosen.get("coverImage", {}).get("medium")
@@ -650,7 +657,8 @@ async def on_reaction_add(reaction, user):
             reaction.message.channel,
             title_en,
             anime_id,
-            cover_url
+            cover_url,
+            visible=True
             )
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
@@ -664,9 +672,9 @@ async def on_reaction_add(reaction, user):
 
 
 # -------- CUSTOM ID GENERATION HANDLER -------
-def next_negative_id() -> int:
+def next_negative_id(ctx) -> int:
     """Return the next available negative ID (-1, -2, …) not yet used."""
-    cursor.execute("SELECT anime_id FROM poll_items")
+    cursor.execute("SELECT anime_id FROM poll_items WHERE guild_id = ?", (ctx.guild.id,))  # noqa: E501
     poll_list = cursor.fetchall()
 
     # Uses the first available custom id number
@@ -709,10 +717,13 @@ def extract_emoji_id(emote_str):
 # --------- VALIDATE EMOTE CAN BE USED BY THE BOT
 async def validate_emote(ctx, emote: str):
     emoji_id = extract_emoji_id(emote)
+
+    # Checks for valid format
     if not emoji_id:
         await ctx.send("Invalid emote format. Please use a custom Discord emoji.")  # noqa: E501
         return False
 
+    # Checks if the emoji is from a server the bot is in
     emoji = bot.get_emoji(emoji_id)
     if emoji is None:
         await ctx.send("Emoji not found or not from a server the bot is in.")
@@ -739,6 +750,16 @@ def get_max_anime_id():
     return data['data']['Page']['media'][0]['id']
 
 
+def get_poll_items(ctx):
+    cursor.execute("""
+    SELECT anime_id, title, cover_url, message_id, emote_text
+    FROM poll_items
+    WHERE guild_id = ?
+    ORDER BY title ASC
+""", (ctx.guild.id,))  # noqa: E501
+    return cursor.fetchall()
+
+
 # group for commands regarding polls
 class polls_group(commands.Cog, name='Polls'):
     def __init__(self, bot):
@@ -749,9 +770,12 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def create_poll(self, ctx):
         """Manually create a poll from the stored requests"""
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+
+        poll_channel_id = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
         # only works in set poll channel
-        if ctx.channel.id != POLL_CHANNEL_ID:
+        if ctx.channel.id != poll_channel_id:
             await ctx.send("Wrong channel")
             return
 
@@ -765,8 +789,7 @@ class polls_group(commands.Cog, name='Polls'):
         # Sends empty list msg if poll list is empty
 
         # Get all poll items
-        cursor.execute("SELECT title, anime_id FROM poll_items ORDER BY title ASC")   # noqa: E501
-        poll_list = cursor.fetchall()
+        poll_list = get_poll_items(ctx)
 
         if poll_list == []:
             await ctx.send("The poll list is empty")
@@ -782,18 +805,16 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def close_poll(self, ctx):
         """Hides the poll channel from general user role, tally up votes and display the winners"""  # noqa: E501
-        role = ctx.guild.get_role(USER_ROLE_ID)
-        request_channel = ctx.guild.get_channel(REQUEST_CHANNEL_ID)
-        poll_channel = ctx.guild.get_channel(POLL_CHANNEL_ID)
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))  # noqa: E501
+        request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
         await ctx.send("Closing polls...")
 
         # Get all poll items
-        cursor.execute(
-            "SELECT title, cover_url, message_id, emote_text FROM poll_items"
-        )
-        poll_list = cursor.fetchall()
-
+        poll_list = get_poll_items(ctx)
+        print(f"Poll list: {poll_list}")  # Debugging line
         # Tries to hide both channels
         try:
             await request_channel.set_permissions(role, view_channel=False)
@@ -806,8 +827,6 @@ class polls_group(commands.Cog, name='Polls'):
         # Dummy winners for easy initial comparison
         first = [["dummy", 0, ""]]
         second = [["dummy2", 0, ""]]
-
-        # channel = ctx.channel
 
         # Iterates through all items in poll_messages
         for title, cover_url, message_id, emote in poll_list:
@@ -855,7 +874,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send(result_msg)
 
         # Clear poll list
-        cursor.execute("DELETE FROM poll_items")
+        cursor.execute("DELETE FROM poll_items WHERE guild_id = ?", (ctx.guild.id,))  # noqa: E501
         conn.commit()
 
     # ------- OPENS REQUEST CHANNEL FOR REQUESTS
@@ -863,9 +882,10 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def open_requests(self, ctx, *, theme: str = ""):
         """Clears the poll and request channel, hides poll channel and shows the request channel for general users"""  # noqa: E501
-        role = ctx.guild.get_role(USER_ROLE_ID)
-        request_channel = ctx.guild.get_channel(REQUEST_CHANNEL_ID)
-        poll_channel = ctx.guild.get_channel(POLL_CHANNEL_ID)
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))
+        request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
     # Checks for set role and request channel
         if role is None:
@@ -907,9 +927,10 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def open_poll(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
-        role = ctx.guild.get_role(USER_ROLE_ID)
-        request_channel = ctx.guild.get_channel(REQUEST_CHANNEL_ID)
-        poll_channel = ctx.guild.get_channel(POLL_CHANNEL_ID)
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))
+        request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
         # Check for channel and user role
         if role is None:
@@ -930,7 +951,6 @@ class polls_group(commands.Cog, name='Polls'):
 
         # Makes poll in poll channel
         await create_poll_in_channel(poll_channel)
-        await ctx.send("Polls are now open!")
 
     # -------- REMOVE ITEM FROM POLL --------
     @commands.command(name="remove", brief="Remove poll item")
@@ -942,7 +962,7 @@ class polls_group(commands.Cog, name='Polls'):
             anime_id_int = int(anime_id)
 
             # Remove item and get name
-            anime_name = remove_poll_item_from_db(anime_id_int)
+            anime_name = remove_poll_item_from_db(ctx, anime_id_int)
 
             # Anime not in db
             if anime_name is None:
@@ -960,46 +980,36 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(administrator=True)
     async def set_poll_channel(self, ctx):
         """Sets the poll channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
-        global POLL_CHANNEL_ID
+        server_settings = guild_settings_cache.get(ctx.guild.id)
 
-        POLL_CHANNEL_ID = ctx.message.channel.id
-        cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE setting = ?
-        """, (POLL_CHANNEL_ID, "POLLS_CHANNEL_ID"))
-        conn.commit()
-        await ctx.send(f"Poll channel set to <#{POLL_CHANNEL_ID}>")
+        server_settings.set("POLL_CHANNEL_ID", ctx.channel.id)
+        await ctx.send(f"Poll channel set to <#{ctx.channel.id}>")
 
     # ------- SET CHANNEL REQUESTS ARE MADE IN
     @commands.command(name="setrequestchannel", brief="Change the request channel")  # noqa: E501
     @commands.has_permissions(administrator=True)
     async def set_request_channel(self, ctx):
         """Sets the request channel to the channel the command is sent in and saves it to settings db"""  # noqa: E501
-        global REQUEST_CHANNEL_ID
+        server_settings = guild_settings_cache.get(ctx.guild.id)
 
-        REQUEST_CHANNEL_ID = ctx.message.channel.id
-        cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE setting = ?
-        """, (REQUEST_CHANNEL_ID, "REQUESTS_CHANNEL_ID"))
-        conn.commit()
-        await ctx.send(f"Request channel set to <#{REQUEST_CHANNEL_ID}>")
+        server_settings.set("REQUESTS_CHANNEL_ID", ctx.channel.id)
+        await ctx.send(f"Request channel set to <#{ctx.channel.id}>")
 
     # ------- SHOWS REQUEST AND POLL CHANNELS
     @commands.command(name="viewchannels", brief="View poll/request channels")
     @commands.has_permissions(kick_members=True)
     async def view_channels(self, ctx):
         """Displays the channels used for the polls and requests"""
-        await ctx.send(f"Poll channel: <#{POLL_CHANNEL_ID}>\nRequest channel: <#{REQUEST_CHANNEL_ID}>")  # noqa: E501
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        role = ctx.guild.get_role(server_settings.get_id("USER_ROLE_ID"))  # noqa: E501
+        await ctx.send(f"Poll channel: <#{server_settings.get_id('POLL_CHANNEL_ID')}>\nRequest channel: <#{server_settings.get_id('REQUESTS_CHANNEL_ID')}>\nUser role: {role.name if role else 'none'}")  # noqa: E501
 
     # ------- SETS USER PERMS FOR POLL CHANNELS
     @commands.command(name="setuserrole", brief="Change the user role")
     @commands.has_permissions(administrator=True)
     async def set_user_role(self, ctx, *, role_name: str):
         """Change the user role that gets modified for viewing the polls and adding requests"""  # noqa: E501
-        global USER_ROLE_ID
+        server_settings = guild_settings_cache.get(ctx.guild.id)
         # Searches for role from given input
         role = discord.utils.get(ctx.guild.roles, name=role_name)
         if role is None:
@@ -1007,14 +1017,8 @@ class polls_group(commands.Cog, name='Polls'):
             return
 
         # If found store id
-        USER_ROLE_ID = role.id
-        await ctx.send(f"User role set to `{role.name}` with ID `{USER_ROLE_ID}`.")  # noqa: E501
-        cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE setting = ?
-        """, (USER_ROLE_ID, "USER_ROLE_ID"))
-        conn.commit()
+        server_settings.set("USER_ROLE_ID", role.id)
+        await ctx.send(f"User role set to `{role.name}` with ID `{role.id}`.")  # noqa: E501
 
     # --------- AUTO POPULATE POLL LIST
     @commands.command(name="randompoll", brief="Auto populate poll list")
@@ -1066,7 +1070,7 @@ class polls_group(commands.Cog, name='Polls'):
                 )
                 print(title)
                 await add_poll_item(
-                    None,
+                    ctx,
                     title,
                     rand_anime["id"],
                     rand_anime.get("coverImage", {}).get("medium", "")
@@ -1087,7 +1091,7 @@ class emote_group(commands.Cog, name='Emotes'):
     @commands.has_permissions(kick_members=True)
     async def view_emotes(self, ctx):
         """Displays a full list of the emotes used for poll votes"""
-        emotes = get_emote_items()
+        emotes = get_emote_items(ctx.guild.id)
 
         # Send emotes in groups of 10 per message
         chunk_size = 10
@@ -1101,8 +1105,11 @@ class emote_group(commands.Cog, name='Emotes'):
     async def remove_emote(self, ctx, emote: str):
         """Remove an emote from the list of emotes used for poll reactions"""
 
+        if not await validate_emote(ctx, emote):
+            return
+
         try:
-            remove_emote_item(emote)
+            remove_emote_item(emote, ctx.guild.id)
             await ctx.send(f"Emoji {emote} removed from the database.")
         except Exception as e:
             await ctx.send(f"Emoji {emote} not found in the database.")
@@ -1114,13 +1121,15 @@ class emote_group(commands.Cog, name='Emotes'):
     async def add_emote(self, ctx, emote: str):
         """Add an emote to the list of emotes used for poll reactions"""
 
-        # If emote valid add to db
-        if await validate_emote(self, ctx, emote):
-            try:
-                add_emote_item(emote)
-                await ctx.send(f"Emoji {emote} added to the emoji list!")
-            except Exception as e:
-                await ctx.send(f"Failed to add emoji: {e}")
+        if not await validate_emote(ctx, emote):
+            return
+        try:
+            add_emote_item(emote, ctx.guild.id)
+            await ctx.send(f"Emoji {emote} added to the database for this server")  # noqa: E501
+
+        # Dupe catching for server emote list
+        except sqlite3.IntegrityError as e:
+            print(f"Failed to insert: {e}")
 
 
 # #updates the bot on command hopefully
@@ -1153,6 +1162,34 @@ async def update_bot(ctx):
     await bot.close()  # cleanly close the bot to allow restart
 
 
+@bot.command(name="initializeserver", brief="Initialize the bot in a server")
+@commands.has_permissions(administrator=True)
+async def initialize_server(ctx):
+    """Initializes the bot in a server by setting up the necessary settings"""
+    global guild_settings_cache
+
+    print("Bot initialized with default settings.")
+    guild_settings_cache[ctx.guild.id] = GuildSettings(ctx.guild.id)
+    settings_list = guild_settings_cache[ctx.guild.id]
+
+    # Setting default values
+    print("Adding default settings")
+    settings_list.add("REQUESTS_CHANNEL_ID", REQUEST_CHANNEL_ID)
+    settings_list.add("POLL_CHANNEL_ID", POLL_CHANNEL_ID)
+    settings_list.add("USER_ROLE_ID", USER_ROLE_ID)
+    settings_list.add("ANIME_NIGHT_DATE", "date")
+    settings_list.add("ANIME_NIGHT_TIME", "time")
+    settings_list.add("ANIME_NIGHT_ROOM", "room")
+    print("Default settings added")
+
+    await ctx.send("Adding default emotes")
+    for emote in ORIGINAL_EMOTES:
+        add_emote_item(emote, ctx.guild.id)
+    print("Added default emotes")
+
+    # await ctx.send("Please configure the poll channel, request channel, and user role using the respective commands.")  # noqa: E501
+
+
 @bot.command(name="hi", brief="hi")
 async def hi(ctx):
     await ctx.send("hi")
@@ -1169,7 +1206,13 @@ async def ban_user(ctx, user: discord.Member):
 async def anime_night(ctx):
     """Displays the details of the """
     if ctx.invoked_subcommand is None:
-        date, time, room = ANIME_NIGHT_DETAILS[:3]  # :3
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        ANIME_NIGHT_DETAILS = [
+            server_settings.get("ANIME_NIGHT_DATE", "date"),
+            server_settings.get("ANIME_NIGHT_TIME", "time"),
+            server_settings.get("ANIME_NIGHT_ROOM", "room")
+        ]
+        date, time, room = ANIME_NIGHT_DETAILS
         await ctx.send(f"Our anime nights are hosted every {date} from {time} in {room}")  # noqa: E501
 
 
@@ -1185,45 +1228,27 @@ async def set_anime_night_detail(ctx):
 @set_anime_night_detail.command(name="date", brief="Change anime night date")
 @commands.has_permissions(kick_members=True)
 async def anime_night_set_date(ctx, *, date: str):
-    global ANIME_NIGHT_DETAILS
-    ANIME_NIGHT_DETAILS[0] = date
+    server_settings = guild_settings_cache.get(ctx.guild.id)
     await ctx.send(f"Anime night date set to {date}")
-    cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE setting = ?
-        """, (ANIME_NIGHT_DETAILS[0], "ANIME_NIGHT_DATE"))
-    conn.commit()
+    server_settings.set("ANIME_NIGHT_DATE", date)
 
 
 # Subcommand: set time
 @set_anime_night_detail.command(name="time", brief="Change anime night time")
 @commands.has_permissions(kick_members=True)
 async def anime_night_set_time(ctx, *, time: str):
-    global ANIME_NIGHT_DETAILS
-    ANIME_NIGHT_DETAILS[1] = time
+    server_settings = guild_settings_cache.get(ctx.guild.id)
     await ctx.send(f"Anime night time set to {time}")
-    cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE setting = ?
-        """, (ANIME_NIGHT_DETAILS[1], "ANIME_NIGHT_TIME"))
-    conn.commit()
+    server_settings.set("ANIME_NIGHT_TIME", time)
 
 
 # Subcommand: set room
 @set_anime_night_detail.command(name="room", brief="Change anime night room")
 @commands.has_permissions(kick_members=True)
 async def anime_night_set_room(ctx, *, room: str):
-    global ANIME_NIGHT_DETAILS
-    ANIME_NIGHT_DETAILS[2] = room
+    server_settings = guild_settings_cache.get(ctx.guild.id)
     await ctx.send(f"Anime night room set to {room}")
-    cursor.execute("""
-            UPDATE settings
-            SET value = ?
-            WHERE setting = ?
-        """, (ANIME_NIGHT_DETAILS[2], "ANIME_NIGHT_ROOM"))
-    conn.commit()
+    server_settings.set("ANIME_NIGHT_ROOM", room)
 
 
 @bot.command(name="viewdatabase", brief="Sends the database file")
@@ -1283,6 +1308,32 @@ async def clear_db(ctx):
         await ctx.send("All tables have been cleared successfully!")
     except Exception as e:
         await ctx.send(f"Error clearing database: {e}")
+
+
+@bot.command(name="serversettings", brief="View server settings")
+@is_owner()
+async def view_server_settings(ctx):
+    """View the settings for a specific server by its guild ID."""
+    try:
+        guild_id = ctx.guild.id  # Use the current guild ID
+        server_settings = guild_settings_cache.get(guild_id)
+        if not server_settings:
+            await ctx.send(f"No settings found for guild ID {guild_id}.")
+            return
+
+        settings = server_settings.all_settings()
+        if not settings:
+            await ctx.send(f"No settings found for guild ID {guild_id}.")
+            return
+
+        settings_msg = f"**Settings for Guild ID {guild_id}:**\n"
+        for key, value in settings.items():
+            settings_msg += f"- {key}: {value}\n"
+
+        await ctx.send(settings_msg)
+    except Exception as e:
+        print(f"Error retrieving server settings: {e}")
+        await ctx.send("Error retrieving server settings.")
 
 
 async def main():
