@@ -1168,19 +1168,19 @@ async def initialize_server(ctx):
     """Initializes the bot in a server by setting up the necessary settings"""
     global guild_settings_cache
 
-    print("Bot initialized with default settings.")
+    await ctx.send("Bot initialized with default settings.")
     guild_settings_cache[ctx.guild.id] = GuildSettings(ctx.guild.id)
     settings_list = guild_settings_cache[ctx.guild.id]
 
     # Setting default values
-    print("Adding default settings")
+    await ctx.send("Adding default settings")
     settings_list.add("REQUESTS_CHANNEL_ID", REQUEST_CHANNEL_ID)
     settings_list.add("POLL_CHANNEL_ID", POLL_CHANNEL_ID)
     settings_list.add("USER_ROLE_ID", USER_ROLE_ID)
     settings_list.add("ANIME_NIGHT_DATE", "date")
     settings_list.add("ANIME_NIGHT_TIME", "time")
     settings_list.add("ANIME_NIGHT_ROOM", "room")
-    print("Default settings added")
+    await ctx.send("Default settings added")
 
     await ctx.send("Adding default emotes")
     for emote in ORIGINAL_EMOTES:
