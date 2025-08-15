@@ -53,10 +53,10 @@ class GuildSettings:
     def set(self, setting: str, value):
         self.settings[setting] = value
         cursor.execute("""
-    INSERT INTO settings (guild_id, setting, value)
-    VALUES (?, ?, ?)
-    ON CONFLICT(guild_id, setting) DO UPDATE SET value = excluded.value
-""", (self.guild_id, setting, value))
+            UPDATE settings
+            SET value = ?
+            WHERE guild_id = ? AND setting = ?
+        """, (value, self.guild_id, setting))
         conn.commit()
 
     def add(self, setting: str, value):
