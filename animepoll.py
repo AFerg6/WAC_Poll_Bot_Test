@@ -1200,10 +1200,27 @@ async def hi(ctx):
     await ctx.send("hi")
 
 
-@bot.command(name="banuser", brief="\"ban\" a user")
+@bot.group(name="banuser", brief="\"ban\" a user")
 @not_user(290968290711306251)
 async def ban_user(ctx, user: discord.Member):
+    """Joke command to ban a user"""
+    guild_settings = guild_settings_cache.get(ctx.guild.id)
+
+    # Gets ban count from settings. if none returns zero
+    ban_count = guild_settings.get_id("BAN_COUNT", 0) + 1
+    if ban_count > 1:
+        guild_settings.set("BAN_COUNT", ban_count)
+    else:
+        guild_settings.add("BAN_COUNT", ban_count)
+
     await ctx.send(f"{user.mention} has been banned")
+
+
+@bot.command(name="bancount", brief="Get the server ban count")
+async def ban_user_count(ctx):
+    guild_settings = guild_settings_cache.get(ctx.guild.id)
+    ban_count = guild_settings.get("BAN_COUNT", 0)
+    await ctx.send(f"The server ban count is: {ban_count}")
 
 
 # Anime night group command
