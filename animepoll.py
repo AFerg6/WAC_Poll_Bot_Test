@@ -1192,6 +1192,7 @@ async def initialize_server(ctx):
     except Exception as e:
         await ctx.send(f"Error adding default emotes: {e}")
 
+    await ctx.send("Server initialization complete.")
     # await ctx.send("Please configure the poll channel, request channel, and user role using the respective commands.")  # noqa: E501
 
 

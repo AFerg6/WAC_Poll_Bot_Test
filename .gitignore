@@ -2,3 +2,4 @@ config.py
 botdata.db
 auto_update_bot.sh
 *.log
+/__pycache__
