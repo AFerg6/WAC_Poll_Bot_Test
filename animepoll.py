@@ -889,7 +889,7 @@ class polls_group(commands.Cog, name='Polls'):
         request_channel = ctx.guild.get_channel(server_settings.get_id("REQUESTS_CHANNEL_ID"))  # noqa: E501
         poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
 
-    # Checks for set role and request channel
+        # Checks for set role and request channel
         if role is None:
             await ctx.send("Role not found.")
             return
@@ -899,28 +899,31 @@ class polls_group(commands.Cog, name='Polls'):
 
         await ctx.send("Opening Requests...")
 
-        # Purge both channels
+        # Set permissions first
+        try:
+            await request_channel.set_permissions(role, view_channel=True)
+            await poll_channel.set_permissions(role, view_channel=False)
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to change channel permissions.")  # noqa: E501
+            return
+        except Exception as e:
+            await ctx.send(f"Failed to set channel permissions: {e}")
+            return
+
+        # Purge both channels after permissions are set
         await request_channel.purge(limit=None)
         await poll_channel.purge(limit=None)
 
         # Set channel name to current theme
         channel_name = f"🎬丨「requests」{theme}"
 
-        # Tries to change name and perms
+        # Tries to change name
         try:
             await request_channel.edit(name=channel_name)
         except discord.Forbidden:
             await ctx.send("I don't have permission to rename that channel.")
         except discord.HTTPException as e:
             await ctx.send(f"Failed to rename the channel: {e}")
-
-        try:
-            await request_channel.set_permissions(role, view_channel=True)
-            await poll_channel.set_permissions(role, view_channel=False)
-        except discord.Forbidden:
-            await ctx.send("I don't have permission to change channel permissions.")  # noqa: E501
-        except Exception as e:
-            await ctx.send(f"Failed to set channel permissions: {e}")
 
         await ctx.send("Requests are now open", delete_after=5)
 
