@@ -831,31 +831,37 @@ class polls_group(commands.Cog, name='Polls'):
         second = [["dummy2", 0, ""]]
 
         # Iterates through all items in poll_messages
-        for title, cover_url, message_id, emote in poll_list:
+        for anime_id, title, cover_url, message_id, emote in poll_list:
             try:
+                if message_id is None:
+                    continue
+                    
                 message = await poll_channel.fetch_message(message_id)
+                
+                # Counts number of votes on a message
+                for reaction in message.reactions:
+                    # Checks for initially used emoji to filter fake votes
+                    if str(reaction.emoji) == emote:
+                        count = reaction.count
+                        # Removes bot "vote"
+                        if reaction.me:
+                            count -= 1
+
+                        # Winner logic
+                        if count > first[0][1]:
+                            second = first
+                            first = [[title, count, cover_url]]
+                        elif count == first[0][1]:
+                            first.append([title, count, cover_url])
+                        elif count > second[0][1]:
+                            second = [[title, count, cover_url]]
+                        elif count == second[0][1]:
+                            second.append([title, count, cover_url])
             except discord.NotFound:
                 continue  # Skip if message was deleted
-
-            # Counts number of votes on a message
-            for reaction in message.reactions:
-                # Checks for initially used emoji to filter fake votes
-                if str(reaction.emoji) == emote:
-                    count = reaction.count
-                    # Removes bot "vote"
-                    if reaction.me:
-                        count -= 1
-
-                    # Winner logic
-                    if count > first[0][1]:
-                        second = first
-                        first = [[title, count, cover_url]]
-                    elif count == first[0][1]:
-                        first.append([title, count, cover_url])
-                    elif count > second[0][1]:
-                        second = [[title, count, cover_url]]
-                    elif count == second[0][1]:
-                        second.append([title, count, cover_url])
+            except Exception as e:
+                print(f"Error processing message {message_id}: {e}")
+                continue
 
         # Output results
         result_msg = "**Poll Results**\n\n**Top Votes:**\n"
