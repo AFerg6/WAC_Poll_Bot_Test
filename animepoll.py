@@ -934,7 +934,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send("Requests are now open", delete_after=5)
 
     # ------- OPENS POLL CHANNEL AND MAKES POLL
-    @commands.command(name="openpoll", brief="Open polls for users")
+    @commands.command(name="openpoll", brief="Open polls for users", aliases=["openpolls"])
     @commands.has_permissions(kick_members=True)
     async def open_poll(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
