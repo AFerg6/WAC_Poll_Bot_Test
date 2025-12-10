@@ -1155,7 +1155,9 @@ async def update_bot(ctx):
     result = subprocess.run(["git", "pull"], capture_output=True, text=True)
     await ctx.send(f"Git pull output:\n```\n{result.stdout}\n```")
 
-    if(result.stdout == "Already up to date."):
+    print(result.stdout)
+
+    if(result.stdout.strip() == "Already up to date."):
         await ctx.send("Update Complete")
         return
     
