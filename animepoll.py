@@ -7,6 +7,8 @@ import re
 import requests
 import sqlite3
 import subprocess
+import os
+import sys
 
 from discord.ext import commands
 from config import TOKEN
@@ -1160,17 +1162,21 @@ async def update_bot(ctx):
     await ctx.send("Update successful, installing requirements...")
 
     # Run 'pip install -r requirements.txt'
-    result_pip = subprocess.run([
-        "pip",
-        "install",
-        "-r",
-        "requirements.txt"],
+    result_pip = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
         capture_output=True, text=True)
     await ctx.send(f"Pip install output:\n```\n{result_pip.stdout}\n```")
 
     # Restart the bot
     await ctx.send("Restarting bot now...")
-    await bot.close()  # cleanly close the bot to allow restart
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    bot_script = os.path.join(current_dir, "animepoll.py")
+
+    # Launch new instance
+    subprocess.Popen([sys.executable, bot_script], cwd=current_dir)
+
+    # Close current bot instance
+    await bot.close()
 
 
 @bot.command(name="initializeserver", brief="Initialize the bot in a server")
