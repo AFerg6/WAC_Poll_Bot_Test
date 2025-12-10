@@ -1158,7 +1158,7 @@ async def update_bot(ctx):
     print(result.stdout)
 
     if(result.stdout.strip() == "Already up to date."):
-        await ctx.send("Update Complete")
+        await ctx.send("Update Complete") # No updates
         return
     
 
