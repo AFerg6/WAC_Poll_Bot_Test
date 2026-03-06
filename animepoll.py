@@ -762,6 +762,60 @@ def get_poll_items(ctx):
     return cursor.fetchall()
 
 
+async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
+    first = [["dummy", 0, ""]]
+    second = [["dummy2", 0, ""]]
+
+    for _anime_id, title, cover_url, message_id, emote in poll_list:
+        try:
+            if message_id is None:
+                continue
+
+            message = await poll_channel.fetch_message(message_id)
+
+            for reaction in message.reactions:
+                if str(reaction.emoji) == emote:
+                    count = reaction.count
+                    if reaction.me:
+                        count -= 1
+
+                    if count > first[0][1]:
+                        second = first
+                        first = [[title, count, cover_url]]
+                    elif count == first[0][1]:
+                        first.append([title, count, cover_url])
+                    elif count > second[0][1]:
+                        second = [[title, count, cover_url]]
+                    elif count == second[0][1]:
+                        second.append([title, count, cover_url])
+        except discord.NotFound:
+            continue
+        except Exception as e:
+            print(f"Error processing message {message_id}: {e}")
+            continue
+
+    return first, second
+
+
+def build_poll_results_message(first, second, include_cover_urls: bool = True):
+    result_msg = "**Poll Results**\n\n**Top Votes:**\n"
+    for entry in first:
+        if entry[0] != "dummy":
+            result_msg += f"{entry[0]} ({entry[1]} votes)\n"
+            if include_cover_urls and entry[2]:
+                result_msg += f"{entry[2]}\n"
+
+    if len(first) == 1:
+        result_msg += "\n**Second Place:**\n"
+        for entry in second:
+            if entry[0] != "dummy2":
+                result_msg += f"{entry[0]} ({entry[1]} votes)\n"
+                if include_cover_urls and entry[2]:
+                    result_msg += f"{entry[2]}\n"
+
+    return result_msg
+
+
 # group for commands regarding polls
 class polls_group(commands.Cog, name='Polls'):
     def __init__(self, bot):
@@ -828,57 +882,8 @@ class polls_group(commands.Cog, name='Polls'):
         except Exception as e:
             await ctx.send(f"Failed to set channel permissions: {e}")
 
-        # Dummy winners for easy initial comparison
-        first = [["dummy", 0, ""]]
-        second = [["dummy2", 0, ""]]
-
-        # Iterates through all items in poll_messages
-        for anime_id, title, cover_url, message_id, emote in poll_list:
-            try:
-                if message_id is None:
-                    continue
-                    
-                message = await poll_channel.fetch_message(message_id)
-                
-                # Counts number of votes on a message
-                for reaction in message.reactions:
-                    # Checks for initially used emoji to filter fake votes
-                    if str(reaction.emoji) == emote:
-                        count = reaction.count
-                        # Removes bot "vote"
-                        if reaction.me:
-                            count -= 1
-
-                        # Winner logic
-                        if count > first[0][1]:
-                            second = first
-                            first = [[title, count, cover_url]]
-                        elif count == first[0][1]:
-                            first.append([title, count, cover_url])
-                        elif count > second[0][1]:
-                            second = [[title, count, cover_url]]
-                        elif count == second[0][1]:
-                            second.append([title, count, cover_url])
-            except discord.NotFound:
-                continue  # Skip if message was deleted
-            except Exception as e:
-                print(f"Error processing message {message_id}: {e}")
-                continue
-
-        # Output results
-        result_msg = "**Poll Results**\n\n**Top Votes:**\n"
-        for entry in first:
-            if entry[0] != "dummy":
-                result_msg += f"{entry[0]} ({entry[1]} votes)\n{entry[2]}\n"
-
-        if (len(first) == 1):
-            result_msg += "\n**Second Place:**\n"
-            for entry in second:
-                if entry[0] != "dummy2":
-                    result_msg += (
-                        f"{entry[0]} ({entry[1]} votes)\n"
-                        f"{entry[2]}\n"
-                    )
+        first, second = await get_poll_winners(poll_channel, poll_list)
+        result_msg = build_poll_results_message(first, second)
 
         # Announce winners
         await ctx.send(result_msg)
@@ -886,6 +891,28 @@ class polls_group(commands.Cog, name='Polls'):
         # Clear poll list
         cursor.execute("DELETE FROM poll_items WHERE guild_id = ?", (ctx.guild.id,))  # noqa: E501
         conn.commit()
+
+    # ------ SHOWS CURRENT WINNING POLL ITEM WITHOUT CLOSING POLL
+    @commands.command(name="currentpoll", brief="Show current winning poll item")
+    async def current_poll_winner(self, ctx):
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
+
+        if poll_channel is None:
+            await ctx.send("Poll channel not found.")
+            return
+
+        poll_list = get_poll_items(ctx)
+        print(f"Poll list: {poll_list}")
+
+        first, second = await get_poll_winners(poll_channel, poll_list)
+        result_msg = build_poll_results_message(
+            first,
+            second,
+            include_cover_urls=False
+        )
+
+        await ctx.send(result_msg)
 
     # ------- OPENS REQUEST CHANNEL FOR REQUESTS
     @commands.command(name="openrequests", brief="Open requests for users")
