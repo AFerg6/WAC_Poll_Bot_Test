@@ -31,6 +31,7 @@ OWNER_ID = 453186114916974612  # my user id
 
 # Poll support variables
 ANIME_CACHE: dict[int, dict] = {}  # message_id -> list of anime
+MAX_CONCURRENT_POLL_FETCHES = 8
 
 
 class GuildSettings:
@@ -762,37 +763,70 @@ def get_poll_items(ctx):
     return cursor.fetchall()
 
 
+async def get_poll_vote_result(
+    poll_channel: discord.TextChannel,
+    title: str,
+    cover_url: str,
+    message_id: int,
+    emote: str,
+    fetch_limiter: asyncio.Semaphore,
+):
+    try:
+        async with fetch_limiter:
+            message = await poll_channel.fetch_message(message_id)
+    except discord.NotFound:
+        return None
+    except Exception as e:
+        print(f"Error processing message {message_id}: {e}")
+        return None
+
+    count = 0
+    for reaction in message.reactions:
+        if str(reaction.emoji) == emote:
+            count = reaction.count
+            if reaction.me:
+                count -= 1
+            break
+
+    return [title, count, cover_url]
+
+
 async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
     first = [["dummy", 0, ""]]
     second = [["dummy2", 0, ""]]
 
-    for _anime_id, title, cover_url, message_id, emote in poll_list:
-        try:
-            if message_id is None:
-                continue
+    fetch_limiter = asyncio.Semaphore(MAX_CONCURRENT_POLL_FETCHES)
+    tasks = [
+        get_poll_vote_result(
+            poll_channel,
+            title,
+            cover_url,
+            message_id,
+            emote,
+            fetch_limiter,
+        )
+        for _anime_id, title, cover_url, message_id, emote in poll_list
+        if message_id is not None
+    ]
 
-            message = await poll_channel.fetch_message(message_id)
+    vote_results = [
+        result for result in await asyncio.gather(*tasks) if result is not None
+    ]
 
-            for reaction in message.reactions:
-                if str(reaction.emoji) == emote:
-                    count = reaction.count
-                    if reaction.me:
-                        count -= 1
+    if not vote_results:
+        return first, second
 
-                    if count > first[0][1]:
-                        second = first
-                        first = [[title, count, cover_url]]
-                    elif count == first[0][1]:
-                        first.append([title, count, cover_url])
-                    elif count > second[0][1]:
-                        second = [[title, count, cover_url]]
-                    elif count == second[0][1]:
-                        second.append([title, count, cover_url])
-        except discord.NotFound:
-            continue
-        except Exception as e:
-            print(f"Error processing message {message_id}: {e}")
-            continue
+    top_vote_count = max(result[1] for result in vote_results)
+    first = [result for result in vote_results if result[1] == top_vote_count]
+
+    remaining_results = [
+        result for result in vote_results if result[1] < top_vote_count
+    ]
+    if remaining_results:
+        second_vote_count = max(result[1] for result in remaining_results)
+        second = [
+            result for result in remaining_results if result[1] == second_vote_count
+        ]
 
     return first, second
 
@@ -882,6 +916,7 @@ class polls_group(commands.Cog, name='Polls'):
         except Exception as e:
             await ctx.send(f"Failed to set channel permissions: {e}")
 
+        await ctx.send("Collecting results...")
         first, second = await get_poll_winners(poll_channel, poll_list)
         result_msg = build_poll_results_message(first, second)
 
@@ -905,6 +940,7 @@ class polls_group(commands.Cog, name='Polls'):
         poll_list = get_poll_items(ctx)
         print(f"Poll list: {poll_list}")
 
+        await ctx.send("Collecting results...")
         first, second = await get_poll_winners(poll_channel, poll_list)
         result_msg = build_poll_results_message(
             first,
@@ -1178,8 +1214,16 @@ class emote_group(commands.Cog, name='Emotes'):
 async def update_bot(ctx):
     await ctx.send("Starting update...")
 
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    bot_script = os.path.join(current_dir, "animepoll.py")
+
     # Run 'git pull'
-    result = subprocess.run(["git", "pull"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["git", "pull"],
+        capture_output=True,
+        text=True,
+        cwd=current_dir,
+    )
     await ctx.send(f"Git pull output:\n```\n{result.stdout}\n```")
 
     print(result.stdout)
@@ -1196,21 +1240,25 @@ async def update_bot(ctx):
     await ctx.send("Update successful, installing requirements...")
 
     # Run 'pip install -r requirements.txt'
-    result_pip = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-        capture_output=True, text=True)
+    result_pip = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+        capture_output=True,
+        text=True,
+        cwd=current_dir,
+    )
     await ctx.send(f"Pip install output:\n```\n{result_pip.stdout}\n```")
+
+    if result_pip.returncode != 0:
+        await ctx.send(f"Pip install failed: {result_pip.stderr}")
+        return
 
     # Restart the bot
     await ctx.send("Restarting bot now...")
+    await asyncio.sleep(1)
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    bot_script = os.path.join(current_dir, "animepoll.py")
-
-    # Launch new instance
-    subprocess.Popen([sys.executable, bot_script], cwd=current_dir)
-
-    # Close current bot instance
-    await bot.close()
+    conn.commit()
+    conn.close()
+    os.execv(sys.executable, [sys.executable, bot_script])
 
 
 @bot.command(name="initializeserver", brief="Initialize the bot in a server")
