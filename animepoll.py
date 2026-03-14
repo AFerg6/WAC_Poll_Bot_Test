@@ -1311,14 +1311,20 @@ async def update_bot(ctx):
         await ctx.send(f"Pip install failed: {result_pip.stderr}")
         return
 
-    # Restart the bot
+    # Restart the bot in the same terminal
     await ctx.send("Restarting bot now...")
     await asyncio.sleep(1)
 
     conn.commit()
     conn.close()
-    os.execv(sys.executable, [sys.executable, bot_script])
-    sys.exit(0)  # Failsafe in case execv fails
+    # Start a new process in the same terminal and exit this one
+    try:
+        subprocess.Popen([sys.executable, bot_script], cwd=current_dir)
+    except Exception as e:
+        await ctx.send(f"Failed to restart bot: {e}")
+        print(f"Failed to restart bot: {e}")
+        return
+    sys.exit(0)
 
 
 @bot.command(name="initializeserver", brief="Initialize the bot in a server")
@@ -1524,7 +1530,8 @@ async def block_role(ctx, *, role_name: str):
         guild_id = ctx.guild.id
         blocked_roles = cursor.execute("SELECT * FROM settings WHERE guild_id = ? AND setting = ?", (guild_id, "blocked_roles")).fetchall()  # noqa: E501
         blocked_role_ids = {int(row[2]) for row in blocked_roles}
-        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        # Case-insensitive role name search
+        role = discord.utils.get(ctx.guild.roles, name=lambda n: n.lower() == role_name.lower())
 
         if role is None:
             await ctx.send(f"Role `{role_name}` not found. Please check the role name and try again.")
@@ -1549,7 +1556,8 @@ async def unblock_role(ctx, *, role_name: str):
     """Remove a role from the block list that prevents users with that role from voting in polls or adding requests(server mods excluded)"""  # noqa: E501
     try:
         guild_id = ctx.guild.id
-        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        # Case-insensitive role name search
+        role = discord.utils.get(ctx.guild.roles, name=lambda n: n.lower() == role_name.lower())
 
         if role is None:
             await ctx.send(f"Role `{role_name}` not found. Please check the role name and try again.")
