@@ -310,18 +310,29 @@ async def create_poll_in_channel(channel: discord.TextChannel):
     for key in keys_to_delete:
         del ANIME_CACHE[key]
 
-    # Create polls using the extracted anime names
+
+    # Create polls using the extracted anime names, add reactions concurrently
+    tasks = []
     for idx, title in enumerate(titles):
         if idx < len(emotes):
             emote = emotes[idx]
-            sent_message = await channel.send(f"{emote} {title}")
-            await sent_message.add_reaction(emote)
-            cursor.execute("""
-        UPDATE poll_items
-        SET emote_text = ?, message_id = ?
-        WHERE title = ? AND guild_id = ?
-    """, (emote, sent_message.id, title, channel.guild.id))
-            conn.commit()
+            tasks.append((title, emote))
+
+    async def send_and_react(title, emote):
+        sent_message = await channel.send(f"{emote} {title}")
+        # If you want to add more than one reaction per message, extend this list
+        await asyncio.gather(*(sent_message.add_reaction(e) for e in [emote]))
+        cursor.execute(
+            """
+            UPDATE poll_items
+            SET emote_text = ?, message_id = ?
+            WHERE title = ? AND guild_id = ?
+            """,
+            (emote, sent_message.id, title, channel.guild.id)
+        )
+        conn.commit()
+
+    await asyncio.gather(*(send_and_react(title, emote) for title, emote in tasks))
 
     await channel.send("Polls are now open!")
 
@@ -669,6 +680,14 @@ async def on_reaction_add(reaction, user):
         embed = make_anime_embed(chosen)
         await reaction.message.channel.send(embed=embed)
 
+    if check_blocked_roles(user):
+        await reaction.message.channel.send(
+            f"{user.mention} you are blocked from using adding to the polls."
+        )
+        del ANIME_CACHE[reaction.message.id]
+        await reaction.message.clear_reactions()
+        return
+
     # Clean up
     del ANIME_CACHE[reaction.message.id]
     await reaction.message.clear_reactions()
@@ -781,12 +800,51 @@ async def get_poll_vote_result(
         return None
 
     count = 0
+    blocked_users = set()
+    # Cache blocked users for this guild
+    guild = poll_channel.guild
+    blocked_roles = cursor.execute(
+        "SELECT role_id FROM blocked_roles WHERE guild_id = ?", (guild.id,)
+    ).fetchall()
+    blocked_role_ids = {role_id for (role_id,) in blocked_roles}
+
+    def is_blocked(member):
+        # Allow users with manage_messages or higher perms to bypass block
+        if member.guild_permissions.manage_messages or member.guild_permissions.administrator:
+            return False
+        return any(role.id in blocked_role_ids for role in member.roles)
+
+
+    # Find the target reaction
+    target_reaction = None
     for reaction in message.reactions:
         if str(reaction.emoji) == emote:
-            count = reaction.count
-            if reaction.me:
-                count -= 1
+            target_reaction = reaction
             break
+
+    if target_reaction is not None:
+        users = []
+        try:
+            # Fetch all users for the reaction concurrently in batches
+            users = [user async for user in target_reaction.users()]
+        except Exception as e:
+            print(f"Error fetching users for reaction: {e}")
+
+        # Prepare member fetches concurrently
+        async def get_member_safe(user):
+            if user.bot:
+                return None
+            member = guild.get_member(user.id)
+            return (user, member)
+
+        member_results = await asyncio.gather(*(get_member_safe(user) for user in users))
+        for user, member in member_results:
+            if member is None:
+                continue
+            if is_blocked(member):
+                blocked_users.add(user.id)
+                continue
+            count += 1
 
     return [title, count, cover_url]
 
@@ -1455,6 +1513,58 @@ async def view_server_settings(ctx):
         print(f"Error retrieving server settings: {e}")
         await ctx.send("Error retrieving server settings.")
 
+
+@bot.command(name="blockrole", brief="Block a role from voting in polls/requests")
+@commands.has_permissions(administrator=True)
+async def block_role(ctx, *, role_name: str):
+    """Add a role to a block list that prevents users with that role from voting in polls or adding requests(server mods excluded)"""  # noqa: E501
+    try:
+        guild_id = ctx.guild.id
+        blocked_roles = cursor.execute("SELECT role_id FROM blocked_roles WHERE guild_id = ?", (guild_id,)).fetchall()  # noqa: E501
+        blocked_role_ids = {role_id for (role_id,) in blocked_roles}
+        role = discord.utils.get(ctx.guild.roles, name=role_name)
+
+        if role is None:
+            await ctx.send(f"Role `{role_name}` not found.")
+            return
+        if role.id in blocked_role_ids:
+            await ctx.send(f"Role `{role_name}` is already blocked.")
+            return
+        cursor.execute("INSERT INTO blocked_roles (guild_id, role_id) VALUES (?, ?)", (guild_id, role.id))  # noqa: E501
+        conn.commit()
+        await ctx.send(f"Role `{role.name}` has been blocked from voting in polls and adding requests.")  # noqa: E501
+    except Exception as e:
+        print(f"Error blocking role: {e}")
+        await ctx.send("An error occurred while trying to block the role.")
+
+@bot.command(name="unblockrole", brief="Unblock a role from voting in polls/requests")
+@commands.has_permissions(administrator=True)
+async def unblock_role(ctx, *, role_name: str):
+    """Remove a role from the block list that prevents users with that role from voting in polls or adding requests(server mods excluded)"""  # noqa: E501
+    try:
+        guild_id = ctx.guild.id
+        role = discord.utils.get(ctx.guild.roles, name=role_name)
+
+        if role is None:
+            await ctx.send(f"Role `{role_name}` not found.")
+            return
+
+        cursor.execute("DELETE FROM blocked_roles WHERE guild_id = ? AND role_id = ?", (guild_id, role.id))  # noqa: E501
+        conn.commit()
+        await ctx.send(f"Role `{role.name}` has been unblocked and can now vote in polls and add requests.")  # noqa: E501
+    except Exception as e:
+        print(f"Error unblocking role: {e}")
+        await ctx.send("An error occurred while trying to unblock the role.")    
+
+
+def check_blocked_roles(member: discord.Member):
+    # Allow users with manage_messages or higher perms to bypass block
+    if member.guild_permissions.manage_messages or member.guild_permissions.administrator:
+        return False
+    guild_id = member.guild.id
+    blocked_roles = cursor.execute("SELECT role_id FROM blocked_roles WHERE guild_id = ?", (guild_id,)).fetchall()  # noqa: E501
+    blocked_role_ids = {role_id for (role_id,) in blocked_roles}
+    return any(role.id in blocked_role_ids for role in member.roles)
 
 async def main():
     await bot.add_cog(polls_group(bot))
