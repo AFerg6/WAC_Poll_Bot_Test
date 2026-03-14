@@ -1275,8 +1275,9 @@ async def update_bot(ctx):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     bot_script = os.path.join(current_dir, "animepoll.py")
 
-    # Run 'git pull'
-    result = subprocess.run(
+    # Run 'git pull' in a thread to avoid blocking event loop
+    result = await asyncio.to_thread(
+        subprocess.run,
         ["git", "pull"],
         capture_output=True,
         text=True,
@@ -1289,7 +1290,6 @@ async def update_bot(ctx):
     if(result.stdout.strip() == "Already up to date."):
         await ctx.send("Update Complete") # No updates
         return
-    
 
     # Check if git pull was successful
     if result.returncode != 0:
@@ -1297,8 +1297,9 @@ async def update_bot(ctx):
         return
     await ctx.send("Update successful, installing requirements...")
 
-    # Run 'pip install -r requirements.txt'
-    result_pip = subprocess.run(
+    # Run 'pip install -r requirements.txt' in a thread
+    result_pip = await asyncio.to_thread(
+        subprocess.run,
         [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
         capture_output=True,
         text=True,
@@ -1317,6 +1318,7 @@ async def update_bot(ctx):
     conn.commit()
     conn.close()
     os.execv(sys.executable, [sys.executable, bot_script])
+    sys.exit(0)  # Failsafe in case execv fails
 
 
 @bot.command(name="initializeserver", brief="Initialize the bot in a server")
