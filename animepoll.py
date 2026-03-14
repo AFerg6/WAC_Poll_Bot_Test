@@ -1522,19 +1522,23 @@ async def block_role(ctx, *, role_name: str):
     """Add a role to a block list that prevents users with that role from voting in polls or adding requests(server mods excluded)"""  # noqa: E501
     try:
         guild_id = ctx.guild.id
-        blocked_roles = cursor.execute("SELECT role_id FROM blocked_roles WHERE guild_id = ?", (guild_id,)).fetchall()  # noqa: E501
-        blocked_role_ids = {role_id for (role_id,) in blocked_roles}
+        blocked_roles = cursor.execute("SELECT * FROM settings WHERE guild_id = ? AND setting = ?", (guild_id, "blocked_roles")).fetchall()  # noqa: E501
+        blocked_role_ids = {int(row[2]) for row in blocked_roles}
         role = discord.utils.get(ctx.guild.roles, name=role_name)
 
         if role is None:
-            await ctx.send(f"Role `{role_name}` not found.")
+            await ctx.send(f"Role `{role_name}` not found. Please check the role name and try again.")
             return
-        if role.id in blocked_role_ids:
-            await ctx.send(f"Role `{role_name}` is already blocked.")
+        if int(role.id) in blocked_role_ids:
+            await ctx.send(f"Role `{role_name}` is already blocked from voting in polls and adding requests.")
             return
-        cursor.execute("INSERT INTO blocked_roles (guild_id, role_id) VALUES (?, ?)", (guild_id, role.id))  # noqa: E501
-        conn.commit()
-        await ctx.send(f"Role `{role.name}` has been blocked from voting in polls and adding requests.")  # noqa: E501
+        try:
+            cursor.execute("INSERT INTO settings (guild_id, setting, value) VALUES (?, ?, ?)", (guild_id, "blocked_roles", str(int(role.id))))  # noqa: E501
+            conn.commit()
+            await ctx.send(f"Role `{role.name}` has been blocked from voting in polls and adding requests.")  # noqa: E501
+        except Exception as e:
+            await ctx.send(f"Failed to block role `{role_name}` due to a database error.")
+            print(f"Error blocking role in DB: {e}")
     except Exception as e:
         print(f"Error blocking role: {e}")
         await ctx.send("An error occurred while trying to block the role.")
@@ -1548,12 +1552,19 @@ async def unblock_role(ctx, *, role_name: str):
         role = discord.utils.get(ctx.guild.roles, name=role_name)
 
         if role is None:
-            await ctx.send(f"Role `{role_name}` not found.")
+            await ctx.send(f"Role `{role_name}` not found. Please check the role name and try again.")
             return
 
-        cursor.execute("DELETE FROM blocked_roles WHERE guild_id = ? AND role_id = ?", (guild_id, role.id))  # noqa: E501
-        conn.commit()
-        await ctx.send(f"Role `{role.name}` has been unblocked and can now vote in polls and add requests.")  # noqa: E501
+        try:
+            result = cursor.execute("DELETE FROM settings WHERE guild_id = ? AND setting = ? AND value = ?", (guild_id, "blocked_roles", str(int(role.id))))  # noqa: E501
+            conn.commit()
+            if result.rowcount == 0:
+                await ctx.send(f"Role `{role_name}` was not blocked, so nothing was changed.")
+            else:
+                await ctx.send(f"Role `{role.name}` has been unblocked and can now vote in polls and add requests.")  # noqa: E501
+        except Exception as e:
+            await ctx.send(f"Failed to unblock role `{role_name}` due to a database error.")
+            print(f"Error unblocking role in DB: {e}")
     except Exception as e:
         print(f"Error unblocking role: {e}")
         await ctx.send("An error occurred while trying to unblock the role.")    
@@ -1564,9 +1575,9 @@ def check_blocked_roles(member: discord.Member):
     if member.guild_permissions.manage_messages or member.guild_permissions.administrator:
         return False
     guild_id = member.guild.id
-    blocked_roles = cursor.execute("SELECT role_id FROM blocked_roles WHERE guild_id = ?", (guild_id,)).fetchall()  # noqa: E501
-    blocked_role_ids = {role_id for (role_id,) in blocked_roles}
-    return any(role.id in blocked_role_ids for role in member.roles)
+    blocked_roles = cursor.execute("SELECT * FROM settings WHERE guild_id = ? AND setting = ?", (guild_id, "blocked_roles")).fetchall()  # noqa: E501
+    blocked_role_ids = {int(row[2]) for row in blocked_roles}
+    return any(int(role.id) in blocked_role_ids for role in member.roles)
 
 async def main():
     await bot.add_cog(polls_group(bot))
