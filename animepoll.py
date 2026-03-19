@@ -31,7 +31,9 @@ OWNER_ID = 453186114916974612  # my user id
 
 # Poll support variables
 ANIME_CACHE: dict[int, dict] = {}  # message_id -> list of anime
-MAX_CONCURRENT_POLL_FETCHES = 8
+MAX_CONCURRENT_POLL_FETCHES = 4
+LIVE_WINNER_REFRESH_DELAY_SECONDS = 2.0
+LIVE_WINNER_REFRESH_TASKS: dict[int, asyncio.Task] = {}
 
 
 class GuildSettings:
@@ -721,7 +723,7 @@ async def on_reaction_add(reaction, user):
         (guild.id, reaction.message.id)
     ).fetchone()
     if poll_row:
-        await refresh_live_winner_message_for_guild(guild)
+        schedule_live_winner_refresh(guild)
 
 
 @bot.event
@@ -741,7 +743,7 @@ async def on_reaction_remove(reaction, user):
         (guild.id, reaction.message.id)
     ).fetchone()
     if poll_row:
-        await refresh_live_winner_message_for_guild(guild)
+        schedule_live_winner_refresh(guild)
 
 
 # -------- CUSTOM ID GENERATION HANDLER -------
@@ -859,13 +861,36 @@ async def get_poll_vote_result(
     emote: str,
     fetch_limiter: asyncio.Semaphore,
 ):
-    try:
-        async with fetch_limiter:
-            message = await poll_channel.fetch_message(message_id)
-    except discord.NotFound:
-        return None
-    except Exception as e:
-        print(f"Error processing message {message_id}: {e}")
+    message = None
+    async with fetch_limiter:
+        for attempt in range(3):
+            try:
+                message = await poll_channel.fetch_message(message_id)
+                break
+            except discord.NotFound:
+                return None
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = getattr(e, "retry_after", 1.5)
+                    try:
+                        retry_after = float(retry_after)
+                    except (TypeError, ValueError):
+                        retry_after = 1.5
+                    wait_for = min(max(retry_after, 0.5), 5.0)
+                    print(
+                        f"Rate limited while fetching {message_id}, "
+                        f"retrying in {wait_for:.2f}s (attempt {attempt + 1}/3)"
+                    )
+                    await asyncio.sleep(wait_for)
+                    continue
+                print(f"HTTP error processing message {message_id}: {e}")
+                return None
+            except Exception as e:
+                print(f"Error processing message {message_id}: {e}")
+                return None
+
+    if message is None:
+        print(f"Skipping message {message_id}: unable to fetch after retries.")
         return None
 
     count = 0
@@ -1011,6 +1036,54 @@ async def refresh_live_winner_message_for_guild(guild: discord.Guild):
         print(f"Failed to update live winner message: {e}")
 
 
+def schedule_live_winner_refresh(guild: discord.Guild):
+    """Debounce refreshes so rapid vote events trigger one update."""
+    existing_task = LIVE_WINNER_REFRESH_TASKS.get(guild.id)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+
+    async def delayed_refresh():
+        try:
+            await asyncio.sleep(LIVE_WINNER_REFRESH_DELAY_SECONDS)
+            await refresh_live_winner_message_for_guild(guild)
+        except asyncio.CancelledError:
+            return
+        finally:
+            current_task = asyncio.current_task()
+            if LIVE_WINNER_REFRESH_TASKS.get(guild.id) is current_task:
+                LIVE_WINNER_REFRESH_TASKS.pop(guild.id, None)
+
+    LIVE_WINNER_REFRESH_TASKS[guild.id] = asyncio.create_task(delayed_refresh())
+
+
+async def disable_live_winner_for_guild(guild: discord.Guild, delete_message: bool = True):
+    """Disable live winner updates and optionally delete the tracked message."""
+    server_settings = guild_settings_cache.get(guild.id)
+    if server_settings is None:
+        return
+
+    pending_task = LIVE_WINNER_REFRESH_TASKS.pop(guild.id, None)
+    if pending_task and not pending_task.done():
+        pending_task.cancel()
+
+    live_msg_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
+    if not live_msg_id:
+        return
+
+    if delete_message:
+        poll_channel = guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))
+        if poll_channel is not None:
+            try:
+                live_msg = await poll_channel.fetch_message(live_msg_id)
+                await live_msg.delete()
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                print(f"Failed to delete live winner message: {e}")
+
+    save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", 0)
+
+
 # group for commands regarding polls
 class polls_group(commands.Cog, name='Polls'):
     def __init__(self, bot):
@@ -1084,6 +1157,9 @@ class polls_group(commands.Cog, name='Polls'):
         # Announce winners
         await ctx.send(result_msg)
 
+        # Disable and clean up any active live-winner message for this poll cycle.
+        await disable_live_winner_for_guild(ctx.guild, delete_message=True)
+
         # Clear poll list
         cursor.execute("DELETE FROM poll_items WHERE guild_id = ?", (ctx.guild.id,))  # noqa: E501
         conn.commit()
@@ -1145,6 +1221,9 @@ class polls_group(commands.Cog, name='Polls'):
         # Purge both channels after permissions are set
         await request_channel.purge(limit=None)
         await poll_channel.purge(limit=None)
+
+        # Poll messages were wiped; clear tracked live-winner state too.
+        await disable_live_winner_for_guild(ctx.guild, delete_message=False)
 
         # Set channel name to current theme
         channel_name = f"🎬丨「requests」{theme}"
@@ -1321,10 +1400,11 @@ class polls_group(commands.Cog, name='Polls'):
     @commands.has_permissions(kick_members=True)
     async def live_winner(self, ctx):
         """Creates a message that shows the current winners of the poll for a server and updates as votes come in"""  # noqa: E501
+        status_message = await ctx.send("Setting up live winner message...")
         server_settings = guild_settings_cache.get(ctx.guild.id)
         poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
         if poll_channel is None:
-            await ctx.send("Poll channel not found.")
+            await status_message.edit(content="Poll channel not found.")
             return
 
         poll_list = get_poll_items_by_guild_id(ctx.guild.id)
@@ -1337,24 +1417,21 @@ class polls_group(commands.Cog, name='Polls'):
         result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
 
         existing_live_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
-        live_message = None
         if existing_live_id:
             try:
-                live_message = await poll_channel.fetch_message(existing_live_id)
+                await poll_channel.fetch_message(existing_live_id)
+                await status_message.edit(content="Live winner message already exists and is active.")
+                return
             except discord.NotFound:
-                live_message = None
+                # Stale setting; a new live message will be created below.
+                pass
             except Exception as e:
-                await ctx.send(f"Failed to fetch previous live winner message: {e}")
+                await status_message.edit(content=f"Failed to fetch previous live winner message: {e}")
                 return
 
-        if live_message is None:
-            live_message = await poll_channel.send(result_msg)
-            await ctx.send("Live winner message created.")
-        else:
-            await live_message.edit(content=result_msg)
-            await ctx.send("Live winner message updated.")
-
+        live_message = await poll_channel.send(result_msg)
         save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", live_message.id)
+        await status_message.edit(content=f"Live winner message created in <#{poll_channel.id}> and is now active.")
         
 
 
