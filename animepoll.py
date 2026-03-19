@@ -1407,15 +1407,6 @@ class polls_group(commands.Cog, name='Polls'):
             await status_message.edit(content="Poll channel not found.")
             return
 
-        poll_list = get_poll_items_by_guild_id(ctx.guild.id)
-        first, second = await get_poll_winners(poll_channel, poll_list)
-        result_msg = build_poll_results_message(
-            first,
-            second,
-            include_cover_urls=False
-        )
-        result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
-
         existing_live_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
         if existing_live_id:
             try:
@@ -1424,14 +1415,17 @@ class polls_group(commands.Cog, name='Polls'):
                 return
             except discord.NotFound:
                 # Stale setting; a new live message will be created below.
-                pass
+                save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", 0)
             except Exception as e:
                 await status_message.edit(content=f"Failed to fetch previous live winner message: {e}")
                 return
 
-        live_message = await poll_channel.send(result_msg)
+        live_message = await poll_channel.send(
+            "Preparing live poll winner results..."
+        )
         save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", live_message.id)
         await status_message.edit(content=f"Live winner message created in <#{poll_channel.id}> and is now active.")
+        schedule_live_winner_refresh(ctx.guild)
         
 
 
