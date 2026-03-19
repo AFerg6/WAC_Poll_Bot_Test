@@ -894,13 +894,15 @@ async def get_poll_vote_result(
         return None
 
     count = 0
-    blocked_users = set()
     # Cache blocked users for this guild
     guild = poll_channel.guild
     blocked_roles = cursor.execute(
-        "SELECT role_id FROM blocked_roles WHERE guild_id = ?", (guild.id,)
+        "SELECT value FROM settings WHERE guild_id = ? AND setting = ?",
+        (guild.id, "blocked_roles")
     ).fetchall()
-    blocked_role_ids = {role_id for (role_id,) in blocked_roles}
+    blocked_role_ids = {
+        int(role_id_str) for (role_id_str,) in blocked_roles if str(role_id_str).isdigit()
+    }
 
     def is_blocked(member):
         # Allow users with manage_messages or higher perms to bypass block
@@ -935,7 +937,6 @@ async def get_poll_vote_result(
             if member is None:
                 continue
             if is_blocked(member):
-                blocked_users.add(user.id)
                 continue
             count += 1
 
@@ -1048,6 +1049,8 @@ def schedule_live_winner_refresh(guild: discord.Guild):
             await refresh_live_winner_message_for_guild(guild)
         except asyncio.CancelledError:
             return
+        except Exception as e:
+            print(f"Live winner refresh failed for guild {guild.id}: {e}")
         finally:
             current_task = asyncio.current_task()
             if LIVE_WINNER_REFRESH_TASKS.get(guild.id) is current_task:
