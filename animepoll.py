@@ -933,7 +933,11 @@ async def get_poll_vote_result(
             return (user, member)
 
         member_results = await asyncio.gather(*(get_member_safe(user) for user in users))  # noqa: E501
-        for user, member in member_results:
+        for member_result in member_results:
+            if member_result is None:
+                continue
+
+            user, member = member_result
             if member is None:
                 continue
             if is_blocked(member):
