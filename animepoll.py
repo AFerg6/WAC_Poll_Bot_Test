@@ -311,17 +311,35 @@ async def create_poll_in_channel(channel: discord.TextChannel):
         del ANIME_CACHE[key]
 
 
-    # Create polls using the extracted anime names, add reactions concurrently
-    tasks = []
-    for idx, title in enumerate(titles):
-        if idx < len(emotes):
-            emote = emotes[idx]
-            tasks.append((title, emote))
+    if len(emotes) < len(titles):
+        await channel.send(
+            f"Warning: only {len(emotes)} emotes are configured for "
+            f"{len(titles)} poll items. Extra items were skipped."
+        )
 
-    async def send_and_react(title, emote):
+    pair_count = min(len(titles), len(emotes))
+    created = 0
+
+    # Keep this sequential: sqlite cursor usage is shared and not concurrency-safe.
+    for idx in range(pair_count):
+        title = titles[idx]
+        emote = emotes[idx]
+
         sent_message = await channel.send(f"{emote} {title}")
-        # If you want to add more than one reaction per message, extend this list
-        await asyncio.gather(*(sent_message.add_reaction(e) for e in [emote]))
+
+        # Resolve custom emojis explicitly so add_reaction works reliably.
+        reaction_target = emote
+        emoji_id = extract_emoji_id(emote)
+        if emoji_id:
+            resolved = channel.guild.get_emoji(emoji_id) or bot.get_emoji(emoji_id)
+            if resolved is not None:
+                reaction_target = resolved
+
+        try:
+            await sent_message.add_reaction(reaction_target)
+        except Exception as e:
+            print(f"Failed to add reaction {emote} for '{title}': {e}")
+
         cursor.execute(
             """
             UPDATE poll_items
@@ -330,11 +348,10 @@ async def create_poll_in_channel(channel: discord.TextChannel):
             """,
             (emote, sent_message.id, title, channel.guild.id)
         )
-        conn.commit()
+        created += 1
 
-    await asyncio.gather(*(send_and_react(title, emote) for title, emote in tasks))
-
-    await channel.send("Polls are now open!")
+    conn.commit()
+    await channel.send(f"Polls are now open! ({created} items)")
 
 
 # ---------- EMBED BUILDER ----------
