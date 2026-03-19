@@ -987,8 +987,13 @@ async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
     return first, second
 
 
-def build_poll_results_message(first, second, include_cover_urls: bool = True):
-    result_msg = "**Poll Results**\n\n**Top Votes:**\n"
+def build_poll_results_message(
+    first,
+    second,
+    include_cover_urls: bool = True,
+    title: str = "Poll Results"
+):
+    result_msg = f"**{title}**\n\n**Top Votes:**\n"
     for entry in first:
         if entry[0] != "dummy":
             result_msg += f"{entry[0]} ({entry[1]} votes)\n"
@@ -1022,7 +1027,12 @@ async def refresh_live_winner_message_for_guild(guild: discord.Guild):
 
     poll_list = get_poll_items_by_guild_id(guild.id)
     first, second = await get_poll_winners(poll_channel, poll_list)
-    result_msg = build_poll_results_message(first, second, include_cover_urls=False)
+    result_msg = build_poll_results_message(
+        first,
+        second,
+        include_cover_urls=False,
+        title="Current Winners"
+    )
     result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
 
     try:
