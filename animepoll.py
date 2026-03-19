@@ -1282,6 +1282,51 @@ class emote_group(commands.Cog, name='Emotes'):
         except sqlite3.IntegrityError as e:
             print(f"Failed to insert: {e}")
 
+    # ------ REMOVE UNAVAILABLE EMOTES FROM SERVER LIST
+    @commands.command(name="cleanupemotes", brief="Remove unavailable emotes")
+    @commands.has_permissions(kick_members=True)
+    async def cleanup_emotes(self, ctx):
+        """Removes emotes from this server's emote DB list if they no longer exist or are unavailable."""  # noqa: E501
+        guild_id = ctx.guild.id
+        emotes = get_emote_items(guild_id)
+
+        if not emotes:
+            await ctx.send("No emotes are configured for this server.")
+            return
+
+        removed = []
+        for emote in emotes:
+            emoji_id = extract_emoji_id(emote)
+            if not emoji_id:
+                removed.append(emote)
+                continue
+
+            emoji = self.bot.get_emoji(emoji_id) or ctx.guild.get_emoji(emoji_id)
+            if emoji is None or not getattr(emoji, "available", True):
+                removed.append(emote)
+
+        if not removed:
+            await ctx.send("All configured emotes are currently available.")
+            return
+
+        # Remove stale emotes from poll emote list and clear any stale references in poll items.
+        for emote in removed:
+            cursor.execute(
+                "DELETE FROM emote_guilds WHERE emote_text = ? AND guild_id = ?",
+                (emote, guild_id)
+            )
+            cursor.execute(
+                "UPDATE poll_items SET emote_text = NULL WHERE guild_id = ? AND emote_text = ?",  # noqa: E501
+                (guild_id, emote)
+            )
+        conn.commit()
+
+        preview = ", ".join(removed[:10])
+        suffix = "..." if len(removed) > 10 else ""
+        await ctx.send(
+            f"Removed {len(removed)} unavailable emote(s) from this server list:\n{preview}{suffix}"  # noqa: E501
+        )
+
 
 # #updates the bot on command hopefully
 @bot.command(name="updatebot", brief="Update bot from git page")
