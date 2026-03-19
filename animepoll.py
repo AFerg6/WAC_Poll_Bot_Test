@@ -310,7 +310,6 @@ async def create_poll_in_channel(channel: discord.TextChannel):
     for key in keys_to_delete:
         del ANIME_CACHE[key]
 
-
     if len(emotes) < len(titles):
         await channel.send(
             f"Warning: only {len(emotes)} emotes are configured for "
@@ -320,7 +319,7 @@ async def create_poll_in_channel(channel: discord.TextChannel):
     pair_count = min(len(titles), len(emotes))
     created = 0
 
-    # Keep this sequential: sqlite cursor usage is shared and not concurrency-safe.
+    # Keep this sequential: sqlite cursor usage is shared and not concurrency-safe. # noqa: E501
     for idx in range(pair_count):
         title = titles[idx]
         emote = emotes[idx]
@@ -331,7 +330,7 @@ async def create_poll_in_channel(channel: discord.TextChannel):
         reaction_target = emote
         emoji_id = extract_emoji_id(emote)
         if emoji_id:
-            resolved = channel.guild.get_emoji(emoji_id) or bot.get_emoji(emoji_id)
+            resolved = channel.guild.get_emoji(emoji_id) or bot.get_emoji(emoji_id)  # noqa: E501
             if resolved is not None:
                 reaction_target = resolved
 
@@ -635,7 +634,10 @@ async def anime(ctx, *, anime_name: str):
 # ----- REACTION HANDLER  (SELECTION / CANCEL) -------
 @bot.event
 async def on_reaction_add(reaction, user):
-    server_settings = guild_settings_cache.get(reaction.message.guild.id)
+    guild = reaction.message.guild
+    if guild is None:
+        return
+    server_settings = guild_settings_cache.get(guild.id)
 
     # Ignore bot reactions
     if user.bot:
@@ -643,71 +645,103 @@ async def on_reaction_add(reaction, user):
 
     # Save message to cache to keep interactivity active
     payload = ANIME_CACHE.get(reaction.message.id)
-    if not payload:
-        return  # Reaction isn't for an anime message
+    if payload:
+        # Only command author may react
+        if user.id != payload["user_id"]:
+            await reaction.message.channel.send(
+                f"{user.mention} only the command author can make a selection."
+            )
+            await reaction.remove(user)
+            return
 
-    # Only command author may react
-    if user.id != payload["user_id"]:
-        await reaction.message.channel.send(
-            f"{user.mention} only the command author can make a selection."
-        )
-        await reaction.remove(user)
-        return
+        emoji = str(reaction.emoji)
+        nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 
-    emoji = str(reaction.emoji)
-    nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+        # ---------- CANCEL ----------
+        if emoji == "❌":
+            del ANIME_CACHE[reaction.message.id]
+            await reaction.message.channel.send("Selection cancelled.")
+            await reaction.message.clear_reactions()
+            return
 
-    # ---------- CANCEL ----------
-    if emoji == "❌":
+        # ---------- NUMBER PICK ----------
+        if emoji not in nums:
+            return  # some other emoji
+
+        index = nums.index(emoji)
+        animes = payload["animes"]
+        if index >= len(animes):
+            return  # should never happen
+
+        chosen = animes[index]  # dict for the anime
+        anime_id = chosen["id"]
+        title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
+
+        # Doesnt add item to poll list if not in set request channel
+        if reaction.message.channel.id == server_settings.get_id("REQUESTS_CHANNEL_ID"):  # noqa: E501
+            cover_url = (
+                chosen.get("coverImage", {}).get("large")
+                or chosen.get("coverImage", {}).get("medium")
+                or None
+                )
+            await add_poll_item(
+                reaction.message.channel,
+                title_en,
+                anime_id,
+                cover_url,
+                visible=True
+                )
+            embed = make_anime_embed(chosen)
+            await reaction.message.channel.send(embed=embed)
+        else:
+            embed = make_anime_embed(chosen)
+            await reaction.message.channel.send(embed=embed)
+
+        if check_blocked_roles(user):
+            await reaction.message.channel.send(
+                f"{user.mention} you are blocked from using adding to the polls."
+            )
+            del ANIME_CACHE[reaction.message.id]
+            await reaction.message.clear_reactions()
+            return
+
+        # Clean up
         del ANIME_CACHE[reaction.message.id]
-        await reaction.message.channel.send("Selection cancelled.")
         await reaction.message.clear_reactions()
         return
 
-    # ---------- NUMBER PICK ----------
-    if emoji not in nums:
-        return  # some other emoji
-
-    index = nums.index(emoji)
-    animes = payload["animes"]
-    if index >= len(animes):
-        return  # should never happen
-
-    chosen = animes[index]  # dict for the anime
-    anime_id = chosen["id"]
-    title_en = chosen["title"].get("english") or chosen["title"].get("romaji")
-
-    # Doesnt add item to poll list if not in set request channel
-    if reaction.message.channel.id == server_settings.get_id("REQUESTS_CHANNEL_ID"):  # noqa: E501
-        cover_url = (
-            chosen.get("coverImage", {}).get("large")
-            or chosen.get("coverImage", {}).get("medium")
-            or None
-            )
-        await add_poll_item(
-            reaction.message.channel,
-            title_en,
-            anime_id,
-            cover_url,
-            visible=True
-            )
-        embed = make_anime_embed(chosen)
-        await reaction.message.channel.send(embed=embed)
-    else:
-        embed = make_anime_embed(chosen)
-        await reaction.message.channel.send(embed=embed)
-
-    if check_blocked_roles(user):
-        await reaction.message.channel.send(
-            f"{user.mention} you are blocked from using adding to the polls."
-        )
-        del ANIME_CACHE[reaction.message.id]
-        await reaction.message.clear_reactions()
+    # Poll vote reactions: refresh live winner text when poll items are changed.
+    if server_settings is None:
+        return
+    if reaction.message.channel.id != server_settings.get_id("POLL_CHANNEL_ID"):
         return
 
-    # Clean up
-    del ANIME_CACHE[reaction.message.id]
-    await reaction.message.clear_reactions()
+    poll_row = cursor.execute(
+        "SELECT 1 FROM poll_items WHERE guild_id = ? AND message_id = ?",
+        (guild.id, reaction.message.id)
+    ).fetchone()
+    if poll_row:
+        await refresh_live_winner_message_for_guild(guild)
+
+
+@bot.event
+async def on_reaction_remove(reaction, user):
+    guild = reaction.message.guild
+    if guild is None or user.bot:
+        return
+
+    server_settings = guild_settings_cache.get(guild.id)
+    if server_settings is None:
+        return
+    if reaction.message.channel.id != server_settings.get_id("POLL_CHANNEL_ID"):
+        return
+
+    poll_row = cursor.execute(
+        "SELECT 1 FROM poll_items WHERE guild_id = ? AND message_id = ?",
+        (guild.id, reaction.message.id)
+    ).fetchone()
+    if poll_row:
+        await refresh_live_winner_message_for_guild(guild)
 
 
 # -------- CUSTOM ID GENERATION HANDLER -------
@@ -799,6 +833,24 @@ def get_poll_items(ctx):
     return cursor.fetchall()
 
 
+def get_poll_items_by_guild_id(guild_id: int):
+    cursor.execute("""
+    SELECT anime_id, title, cover_url, message_id, emote_text
+    FROM poll_items
+    WHERE guild_id = ?
+    ORDER BY title ASC
+""", (guild_id,))
+    return cursor.fetchall()
+
+
+def save_server_setting(server_settings: GuildSettings, key: str, value):
+    """Upsert a setting in cache + DB."""
+    if key in server_settings.all_settings():
+        server_settings.set(key, value)
+    else:
+        server_settings.add(key, value)
+
+
 async def get_poll_vote_result(
     poll_channel: discord.TextChannel,
     title: str,
@@ -827,10 +879,9 @@ async def get_poll_vote_result(
 
     def is_blocked(member):
         # Allow users with manage_messages or higher perms to bypass block
-        if member.guild_permissions.manage_messages or member.guild_permissions.administrator:
+        if member.guild_permissions.manage_messages or member.guild_permissions.administrator:  # noqa: E501
             return False
         return any(role.id in blocked_role_ids for role in member.roles)
-
 
     # Find the target reaction
     target_reaction = None
@@ -854,7 +905,7 @@ async def get_poll_vote_result(
             member = guild.get_member(user.id)
             return (user, member)
 
-        member_results = await asyncio.gather(*(get_member_safe(user) for user in users))
+        member_results = await asyncio.gather(*(get_member_safe(user) for user in users))  # noqa: E501
         for user, member in member_results:
             if member is None:
                 continue
@@ -900,7 +951,7 @@ async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
     if remaining_results:
         second_vote_count = max(result[1] for result in remaining_results)
         second = [
-            result for result in remaining_results if result[1] == second_vote_count
+            result for result in remaining_results if result[1] == second_vote_count  # noqa: E501
         ]
 
     return first, second
@@ -923,6 +974,41 @@ def build_poll_results_message(first, second, include_cover_urls: bool = True):
                     result_msg += f"{entry[2]}\n"
 
     return result_msg
+
+
+async def refresh_live_winner_message_for_guild(guild: discord.Guild):
+    """Refresh the configured live-winner message for a guild, if it exists."""
+    server_settings = guild_settings_cache.get(guild.id)
+    if server_settings is None:
+        return
+
+    live_msg_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
+    if not live_msg_id:
+        return
+
+    poll_channel = guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))
+    if poll_channel is None:
+        return
+
+    poll_list = get_poll_items_by_guild_id(guild.id)
+    first, second = await get_poll_winners(poll_channel, poll_list)
+    result_msg = build_poll_results_message(first, second, include_cover_urls=False)
+    result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
+
+    try:
+        live_msg = await poll_channel.fetch_message(live_msg_id)
+    except discord.NotFound:
+        # Live winner message was deleted; disable auto-updates until recreated.
+        save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", 0)
+        return
+    except Exception as e:
+        print(f"Failed to fetch live winner message: {e}")
+        return
+
+    try:
+        await live_msg.edit(content=result_msg)
+    except Exception as e:
+        print(f"Failed to update live winner message: {e}")
 
 
 # group for commands regarding polls
@@ -1003,7 +1089,7 @@ class polls_group(commands.Cog, name='Polls'):
         conn.commit()
 
     # ------ SHOWS CURRENT WINNING POLL ITEM WITHOUT CLOSING POLL
-    @commands.command(name="currentpoll", brief="Show current winning poll item")
+    @commands.command(name="currentpoll", brief="Show current winning poll item")  # noqa: E501
     async def current_poll_winner(self, ctx):
         server_settings = guild_settings_cache.get(ctx.guild.id)
         poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
@@ -1074,7 +1160,7 @@ class polls_group(commands.Cog, name='Polls'):
         await ctx.send("Requests are now open", delete_after=5)
 
     # ------- OPENS POLL CHANNEL AND MAKES POLL
-    @commands.command(name="openpoll", brief="Open polls for users", aliases=["openpolls"])
+    @commands.command(name="openpoll", brief="Open polls for users", aliases=["openpolls"])  # noqa: E501
     @commands.has_permissions(kick_members=True)
     async def open_poll(self, ctx):
         """Hides request channel, shows polls channel and generates a poll"""
@@ -1231,6 +1317,48 @@ class polls_group(commands.Cog, name='Polls'):
         elapsed_time = end_time - start_time
         await ctx.send(f"Poll list populated with {num_items} random anime in {elapsed_time:.2f} seconds.")  # noqa: E501
 
+    @commands.command(name="livewinner", brief="Shows the live poll winners")
+    @commands.has_permissions(kick_members=True)
+    async def live_winner(self, ctx):
+        """Creates a message that shows the current winners of the poll for a server and updates as votes come in"""  # noqa: E501
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
+        if poll_channel is None:
+            await ctx.send("Poll channel not found.")
+            return
+
+        poll_list = get_poll_items_by_guild_id(ctx.guild.id)
+        first, second = await get_poll_winners(poll_channel, poll_list)
+        result_msg = build_poll_results_message(
+            first,
+            second,
+            include_cover_urls=False
+        )
+        result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
+
+        existing_live_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
+        live_message = None
+        if existing_live_id:
+            try:
+                live_message = await poll_channel.fetch_message(existing_live_id)
+            except discord.NotFound:
+                live_message = None
+            except Exception as e:
+                await ctx.send(f"Failed to fetch previous live winner message: {e}")
+                return
+
+        if live_message is None:
+            live_message = await poll_channel.send(result_msg)
+            await ctx.send("Live winner message created.")
+        else:
+            await live_message.edit(content=result_msg)
+            await ctx.send("Live winner message updated.")
+
+        save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", live_message.id)
+        
+
+
+
 
 # groups regarding emote manipulation
 class emote_group(commands.Cog, name='Emotes'):
@@ -1301,7 +1429,7 @@ class emote_group(commands.Cog, name='Emotes'):
                 removed.append(emote)
                 continue
 
-            emoji = self.bot.get_emoji(emoji_id) or ctx.guild.get_emoji(emoji_id)
+            emoji = self.bot.get_emoji(emoji_id) or ctx.guild.get_emoji(emoji_id)  # noqa: E501
             if emoji is None or not getattr(emoji, "available", True):
                 removed.append(emote)
 
@@ -1312,7 +1440,7 @@ class emote_group(commands.Cog, name='Emotes'):
         # Remove stale emotes from poll emote list and clear any stale references in poll items.
         for emote in removed:
             cursor.execute(
-                "DELETE FROM emote_guilds WHERE emote_text = ? AND guild_id = ?",
+                "DELETE FROM emote_guilds WHERE emote_text = ? AND guild_id = ?",  # noqa: E501
                 (emote, guild_id)
             )
             cursor.execute(
@@ -1332,6 +1460,17 @@ class emote_group(commands.Cog, name='Emotes'):
 @bot.command(name="updatebot", brief="Update bot from git page")
 @is_owner()
 async def update_bot(ctx):
+    async def send_output_block(label: str, text: str, max_chars: int = 1800):
+        """Send command output safely without tripping Discord message limits."""  # noqa: E501
+        clean = (text or "").strip()
+        if not clean:
+            await ctx.send(f"{label}: `(no output)`")
+            return
+
+        if len(clean) > max_chars:
+            clean = clean[:max_chars] + "\n...(truncated)"
+        await ctx.send(f"{label}:\n```\n{clean}\n```")
+
     await ctx.send("Starting update...")
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1345,7 +1484,7 @@ async def update_bot(ctx):
         text=True,
         cwd=current_dir,
     )
-    await ctx.send(f"Git pull output:\n```\n{result.stdout}\n```")
+    await send_output_block("Git pull output", result.stdout)
 
     print(result.stdout)
 
@@ -1357,36 +1496,59 @@ async def update_bot(ctx):
     if result.returncode != 0:
         await ctx.send(f"Git pull failed: {result.stderr}")
         return
-    await ctx.send("Update successful, installing requirements...")
+    requirements_changed = "requirements.txt" in (result.stdout or "")
+    if requirements_changed:
+        await ctx.send("Update successful, installing requirements...")
 
-    # Run 'pip install -r requirements.txt' in a thread
-    result_pip = await asyncio.to_thread(
-        subprocess.run,
-        [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-        capture_output=True,
-        text=True,
-        cwd=current_dir,
-    )
-    await ctx.send(f"Pip install output:\n```\n{result_pip.stdout}\n```")
+        # Run pip in non-interactive mode so it cannot block waiting for input.
+        try:
+            result_pip = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    "requirements.txt",
+                    "--no-input",
+                    "--disable-pip-version-check",
+                    "--retries",
+                    "1",
+                    "--timeout",
+                    "30",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=current_dir,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            await ctx.send("Pip install timed out after 10 minutes. Bot was not restarted.")
+            return
 
-    if result_pip.returncode != 0:
-        await ctx.send(f"Pip install failed: {result_pip.stderr}")
-        return
+        pip_output = result_pip.stdout or result_pip.stderr
+        await send_output_block("Pip install output", pip_output)
 
-    # Restart the bot in the same terminal
+        if result_pip.returncode != 0:
+            await send_output_block("Pip install failed", result_pip.stderr)
+            return
+    else:
+        await ctx.send("Update successful. requirements.txt unchanged, skipping pip install.")
+
+    # Restart by replacing the current process; more reliable than Popen + sys.exit.
     await ctx.send("Restarting bot now...")
     await asyncio.sleep(1)
 
     conn.commit()
     conn.close()
-    # Start a new process in the same terminal and exit this one
+
     try:
-        subprocess.Popen([sys.executable, bot_script], cwd=current_dir)
+        os.execv(sys.executable, [sys.executable, bot_script])
     except Exception as e:
         await ctx.send(f"Failed to restart bot: {e}")
         print(f"Failed to restart bot: {e}")
         return
-    sys.exit(0)
 
 
 @bot.command(name="initializeserver", brief="Initialize the bot in a server")
