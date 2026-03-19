@@ -1101,6 +1101,33 @@ async def disable_live_winner_for_guild(guild: discord.Guild, delete_message: bo
     save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", 0)
 
 
+async def ensure_live_winner_for_guild(guild: discord.Guild):
+    """Ensure a live-winner message exists and schedule a refresh."""
+    server_settings = guild_settings_cache.get(guild.id)
+    if server_settings is None:
+        return "error", "Server settings not found."
+
+    poll_channel = guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))
+    if poll_channel is None:
+        return "error", "Poll channel not found."
+
+    existing_live_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
+    if existing_live_id:
+        try:
+            await poll_channel.fetch_message(existing_live_id)
+            schedule_live_winner_refresh(guild)
+            return "exists", "Live winner message already exists and is active."
+        except discord.NotFound:
+            save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", 0)
+        except Exception as e:
+            return "error", f"Failed to fetch previous live winner message: {e}"
+
+    live_message = await poll_channel.send("Preparing live poll winner results...")
+    save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", live_message.id)
+    schedule_live_winner_refresh(guild)
+    return "created", f"Live winner message created in <#{poll_channel.id}> and is now active."
+
+
 # group for commands regarding polls
 class polls_group(commands.Cog, name='Polls'):
     def __init__(self, bot):
@@ -1284,6 +1311,13 @@ class polls_group(commands.Cog, name='Polls'):
 
         # Makes poll in poll channel
         await create_poll_in_channel(poll_channel)
+        live_status, live_message = await ensure_live_winner_for_guild(ctx.guild)
+        if live_status == "created":
+            await ctx.send("Live winner tracking started automatically.")
+        elif live_status == "exists":
+            await ctx.send("Live winner tracking was already active.")
+        else:
+            await ctx.send(f"Live winner auto-start failed: {live_message}")
 
     # -------- REMOVE ITEM FROM POLL --------
     @commands.command(name="remove", brief="Remove poll item")
@@ -1418,31 +1452,8 @@ class polls_group(commands.Cog, name='Polls'):
     async def live_winner(self, ctx):
         """Creates a message that shows the current winners of the poll for a server and updates as votes come in"""  # noqa: E501
         status_message = await ctx.send("Setting up live winner message...")
-        server_settings = guild_settings_cache.get(ctx.guild.id)
-        poll_channel = ctx.guild.get_channel(server_settings.get_id("POLL_CHANNEL_ID"))  # noqa: E501
-        if poll_channel is None:
-            await status_message.edit(content="Poll channel not found.")
-            return
-
-        existing_live_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
-        if existing_live_id:
-            try:
-                await poll_channel.fetch_message(existing_live_id)
-                await status_message.edit(content="Live winner message already exists and is active.")
-                return
-            except discord.NotFound:
-                # Stale setting; a new live message will be created below.
-                save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", 0)
-            except Exception as e:
-                await status_message.edit(content=f"Failed to fetch previous live winner message: {e}")
-                return
-
-        live_message = await poll_channel.send(
-            "Preparing live poll winner results..."
-        )
-        save_server_setting(server_settings, "LIVE_WINNER_MESSAGE_ID", live_message.id)
-        await status_message.edit(content=f"Live winner message created in <#{poll_channel.id}> and is now active.")
-        schedule_live_winner_refresh(ctx.guild)
+        live_status, live_message = await ensure_live_winner_for_guild(ctx.guild)
+        await status_message.edit(content=live_message)
         
 
 
