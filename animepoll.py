@@ -1078,10 +1078,11 @@ async def get_poll_vote_result(
     return (message_id, title, count, cover_url)
 
 
-async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
-    first = [["dummy", 0, ""]]
-    second = [["dummy2", 0, ""]]
-
+async def get_ranked_poll_results(
+    poll_channel: discord.TextChannel,
+    poll_list,
+    use_cache: bool = True,
+):
     guild_id = poll_channel.guild.id
     blocked_role_ids = get_blocked_role_ids_for_guild(guild_id)
     guild_vote_cache = POLL_VOTE_CACHE.setdefault(guild_id, {})
@@ -1093,7 +1094,7 @@ async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
         if message_id is None:
             continue
         # Fast path: use in-memory count cache when we already have this value.
-        if message_id in guild_vote_cache:
+        if use_cache and message_id in guild_vote_cache:
             vote_results.append([title, guild_vote_cache[message_id], cover_url])
             continue
         tasks.append(
@@ -1115,6 +1116,23 @@ async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
         guild_vote_cache[msg_id] = count
         vote_results.append([title, count, cover_url])
 
+    vote_results.sort(key=lambda entry: (-entry[1], entry[0].lower()))
+    return vote_results
+
+
+async def get_poll_winners(
+    poll_channel: discord.TextChannel,
+    poll_list,
+    use_cache: bool = True,
+):
+    first = [["dummy", 0, ""]]
+    second = [["dummy2", 0, ""]]
+
+    vote_results = await get_ranked_poll_results(
+        poll_channel,
+        poll_list,
+        use_cache=use_cache
+    )
     if not vote_results:
         return first, second
 
@@ -1137,7 +1155,7 @@ def build_poll_results_message(
     first,
     second,
     include_cover_urls: bool = True,
-    title: str = "Poll Results"
+    title: str = "Poll Results",
 ):
     result_msg = f"**{title}**\n\n**Top Votes:**\n"
     for entry in first:
@@ -1155,6 +1173,78 @@ def build_poll_results_message(
                     result_msg += f"{entry[2]}\n"
 
     return result_msg
+
+
+def get_first_place_tie_visibility_cap(total_poll_items: int) -> int:
+    """Scale cap from ~1/3 (small polls) down to ~1/6 (large polls)."""
+    if total_poll_items <= 0:
+        return 1
+
+    small_poll_size = 12
+    large_poll_size = 36
+    max_ratio = 1 / 3
+    min_ratio = 1 / 6
+
+    clamped_size = min(max(total_poll_items, small_poll_size), large_poll_size)
+    progress = (clamped_size - small_poll_size) / (large_poll_size - small_poll_size)
+    ratio = max_ratio - ((max_ratio - min_ratio) * progress)
+
+    # Ceil without importing math.
+    cap = int((total_poll_items * ratio) + 0.9999)
+    return max(2, min(cap, total_poll_items))
+
+
+def has_too_many_first_place_ties(tied_first_count: int, total_poll_items: int) -> bool:
+    return tied_first_count > get_first_place_tie_visibility_cap(total_poll_items)
+
+
+def build_live_winner_message(vote_results, total_poll_items: int):
+    """Build live winner text with tie-aware top cutoff handling."""
+    if not vote_results:
+        return "**Current Winners**\n\nNo votes yet."
+
+    top_vote_count = vote_results[0][1]
+    tied_first_count = sum(1 for entry in vote_results if entry[1] == top_vote_count)
+    if has_too_many_first_place_ties(tied_first_count, total_poll_items):
+        tie_cap = get_first_place_tie_visibility_cap(total_poll_items)
+        return (
+            "**Current Winners**\n\n"
+            "No clear winners yet "
+            f"(more than {tie_cap} items are tied for first place)."
+        )
+
+    # Top-6 mode includes ties at the cutoff score.
+    if len(vote_results) <= 6:
+        top_entries = vote_results
+    else:
+        cutoff_votes = vote_results[5][1]
+        top_entries = [entry for entry in vote_results if entry[1] >= cutoff_votes]
+
+    # If top-6 cutoff balloons to 10+ tied items, use place-group mode.
+    use_place_mode = len(top_entries) >= 10
+    if not use_place_mode:
+        result_msg = "**Current Winners**\n\n"
+        for idx, entry in enumerate(top_entries, start=1):
+            result_msg += f"{idx}. {entry[0]} ({entry[1]} votes)\n"
+        return result_msg
+
+    grouped = []
+    for entry in vote_results:
+        if not grouped or grouped[-1][0] != entry[1]:
+            grouped.append((entry[1], [entry]))
+        else:
+            grouped[-1][1].append(entry)
+
+    suffixes = {1: "st", 2: "nd", 3: "rd"}
+    result_msg = "**Current Winners**\n\n"
+    for place, (vote_count, entries) in enumerate(grouped[:4], start=1):
+        suffix = suffixes.get(place, "th")
+        result_msg += f"**{place}{suffix} Place ({vote_count} votes):**\n"
+        for entry in entries:
+            result_msg += f"- {entry[0]}\n"
+        result_msg += "\n"
+
+    return result_msg.strip()
 
 
 async def refresh_live_winner_message_for_guild(guild: discord.Guild):
@@ -1187,13 +1277,8 @@ async def refresh_live_winner_message_for_guild(guild: discord.Guild):
         print(f"Failed to set live winner loading state: {e}")
 
     poll_list = get_poll_items_by_guild_id(guild.id)
-    first, second = await get_poll_winners(poll_channel, poll_list)
-    result_msg = build_poll_results_message(
-        first,
-        second,
-        include_cover_urls=False,
-        title="Current Winners"
-    )
+    vote_results = await get_ranked_poll_results(poll_channel, poll_list)
+    result_msg = build_live_winner_message(vote_results, len(poll_list))
     result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
 
     try:
@@ -1347,7 +1432,11 @@ class polls_group(commands.Cog, name='Polls'):
             await ctx.send(f"Failed to set channel permissions: {e}")
 
         await ctx.send("Collecting results...")
-        first, second = await get_poll_winners(poll_channel, poll_list)
+        first, second = await get_poll_winners(
+            poll_channel,
+            poll_list,
+            use_cache=False
+        )
         result_msg = build_poll_results_message(first, second)
 
         # Announce winners
