@@ -1069,16 +1069,6 @@ async def refresh_live_winner_message_for_guild(guild: discord.Guild):
     if poll_channel is None:
         return
 
-    poll_list = get_poll_items_by_guild_id(guild.id)
-    first, second = await get_poll_winners(poll_channel, poll_list)
-    result_msg = build_poll_results_message(
-        first,
-        second,
-        include_cover_urls=False,
-        title="Current Winners"
-    )
-    result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
-
     try:
         live_msg = await poll_channel.fetch_message(live_msg_id)
     except discord.NotFound:
@@ -1088,6 +1078,21 @@ async def refresh_live_winner_message_for_guild(guild: discord.Guild):
     except Exception as e:
         print(f"Failed to fetch live winner message: {e}")
         return
+
+    try:
+        await live_msg.edit(content="Calculating current winners...")
+    except Exception as e:
+        print(f"Failed to set live winner loading state: {e}")
+
+    poll_list = get_poll_items_by_guild_id(guild.id)
+    first, second = await get_poll_winners(poll_channel, poll_list)
+    result_msg = build_poll_results_message(
+        first,
+        second,
+        include_cover_urls=False,
+        title="Current Winners"
+    )
+    result_msg += f"\nLast updated: <t:{int(time.time())}:R>"
 
     try:
         await live_msg.edit(content=result_msg)
