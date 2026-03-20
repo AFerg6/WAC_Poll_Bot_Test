@@ -746,6 +746,50 @@ async def on_reaction_remove(reaction, user):
         schedule_live_winner_refresh(guild)
 
 
+async def maybe_schedule_live_refresh_by_ids(guild_id: int, channel_id: int, message_id: int):
+    """Schedule a live winner refresh when a poll message reaction changes."""
+    server_settings = guild_settings_cache.get(guild_id)
+    if server_settings is None:
+        return
+    if channel_id != server_settings.get_id("POLL_CHANNEL_ID"):
+        return
+
+    poll_row = cursor.execute(
+        "SELECT 1 FROM poll_items WHERE guild_id = ? AND message_id = ?",
+        (guild_id, message_id)
+    ).fetchone()
+    if not poll_row:
+        return
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    schedule_live_winner_refresh(guild)
+
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    """Use raw events so uncached poll messages still trigger live updates."""
+    if payload.guild_id is None:
+        return
+    await maybe_schedule_live_refresh_by_ids(
+        payload.guild_id,
+        payload.channel_id,
+        payload.message_id
+    )
+
+
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    if payload.guild_id is None:
+        return
+    await maybe_schedule_live_refresh_by_ids(
+        payload.guild_id,
+        payload.channel_id,
+        payload.message_id
+    )
+
+
 # -------- CUSTOM ID GENERATION HANDLER -------
 def next_negative_id(ctx) -> int:
     """Return the next available negative ID (-1, -2, …) not yet used."""
