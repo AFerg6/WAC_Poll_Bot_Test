@@ -34,6 +34,8 @@ ANIME_CACHE: dict[int, dict] = {}  # message_id -> list of anime
 MAX_CONCURRENT_POLL_FETCHES = 4
 LIVE_WINNER_REFRESH_DELAY_SECONDS = 2.0
 LIVE_WINNER_REFRESH_TASKS: dict[int, asyncio.Task] = {}
+# guild_id -> {poll_message_id: current_vote_count}
+POLL_VOTE_CACHE: dict[int, dict[int, int]] = {}
 
 
 class GuildSettings:
@@ -216,15 +218,37 @@ def not_user(user_id):
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+async def resync_live_winner_state(reason: str):
+    """Clear volatile vote cache and schedule refresh for active live winner messages."""
+    print(f"Resyncing live winner state ({reason})")
+    POLL_VOTE_CACHE.clear()
+
+    for guild_id, server_settings in guild_settings_cache.items():
+        live_msg_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
+        if not live_msg_id:
+            continue
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            continue
+        schedule_live_winner_refresh(guild)
+
+
 @bot.event
 async def on_ready():
     print(f'We have logged in as {bot.user}')
+    await resync_live_winner_state("ready")
     try:
         owner = await bot.fetch_user(OWNER_ID)
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         await owner.send(f"Bot restarted at `{now}`.")
     except Exception as e:
         print(f"Failed to send DM: {e}")
+
+
+@bot.event
+async def on_resumed():
+    print("Gateway session resumed.")
+    await resync_live_winner_state("resumed")
 
 
 @bot.event
@@ -320,6 +344,8 @@ async def create_poll_in_channel(channel: discord.TextChannel):
 
     pair_count = min(len(titles), len(emotes))
     created = 0
+    guild_vote_cache = POLL_VOTE_CACHE.setdefault(channel.guild.id, {})
+    guild_vote_cache.clear()
 
     # Keep this sequential: sqlite cursor usage is shared and not concurrency-safe. # noqa: E501
     for idx in range(pair_count):
@@ -349,6 +375,7 @@ async def create_poll_in_channel(channel: discord.TextChannel):
             """,
             (emote, sent_message.id, title, channel.guild.id)
         )
+        guild_vote_cache[sent_message.id] = 0
         created += 1
 
     conn.commit()
@@ -746,7 +773,22 @@ async def on_reaction_remove(reaction, user):
         schedule_live_winner_refresh(guild)
 
 
-async def maybe_schedule_live_refresh_by_ids(guild_id: int, channel_id: int, message_id: int):
+def payload_matches_poll_emote(emote_text: str, payload_emoji: discord.PartialEmoji) -> bool:
+    """Match a raw payload emoji against the configured poll emote."""
+    configured_id = extract_emoji_id(emote_text)
+    if configured_id:
+        return payload_emoji.id == configured_id
+    return str(payload_emoji) == emote_text or payload_emoji.name == emote_text
+
+
+async def maybe_schedule_live_refresh_by_ids(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    payload_emoji: discord.PartialEmoji,
+    user_id: int,
+    is_add: bool,
+):
     """Schedule a live winner refresh when a poll message reaction changes."""
     server_settings = guild_settings_cache.get(guild_id)
     if server_settings is None:
@@ -755,15 +797,46 @@ async def maybe_schedule_live_refresh_by_ids(guild_id: int, channel_id: int, mes
         return
 
     poll_row = cursor.execute(
-        "SELECT 1 FROM poll_items WHERE guild_id = ? AND message_id = ?",
+        "SELECT emote_text FROM poll_items WHERE guild_id = ? AND message_id = ?",
         (guild_id, message_id)
     ).fetchone()
     if not poll_row:
+        return
+    emote_text = poll_row[0]
+    if not payload_matches_poll_emote(emote_text, payload_emoji):
         return
 
     guild = bot.get_guild(guild_id)
     if guild is None:
         return
+
+    # Update in-memory vote cache so live updates do not require full recounts.
+    blocked_role_ids = get_blocked_role_ids_for_guild(guild_id)
+    if bot.user and user_id == bot.user.id:
+        return
+
+    delta = 1 if is_add else -1
+    if blocked_role_ids:
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                # Unknown membership state: force recount path next refresh.
+                POLL_VOTE_CACHE.setdefault(guild_id, {}).pop(message_id, None)
+                schedule_live_winner_refresh(guild)
+                return
+
+        if member.bot:
+            return
+        if not (member.guild_permissions.manage_messages or member.guild_permissions.administrator):  # noqa: E501
+            if any(role.id in blocked_role_ids for role in member.roles):
+                # Keep the reaction visible, but do not count it in cached totals.
+                return
+
+    guild_vote_cache = POLL_VOTE_CACHE.setdefault(guild_id, {})
+    current = guild_vote_cache.get(message_id, 0)
+    guild_vote_cache[message_id] = max(0, current + delta)
     schedule_live_winner_refresh(guild)
 
 
@@ -775,7 +848,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     await maybe_schedule_live_refresh_by_ids(
         payload.guild_id,
         payload.channel_id,
-        payload.message_id
+        payload.message_id,
+        payload.emoji,
+        payload.user_id,
+        True,
     )
 
 
@@ -786,7 +862,10 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     await maybe_schedule_live_refresh_by_ids(
         payload.guild_id,
         payload.channel_id,
-        payload.message_id
+        payload.message_id,
+        payload.emoji,
+        payload.user_id,
+        False,
     )
 
 
@@ -897,6 +976,16 @@ def save_server_setting(server_settings: GuildSettings, key: str, value):
         server_settings.add(key, value)
 
 
+def get_blocked_role_ids_for_guild(guild_id: int) -> set[int]:
+    blocked_roles = cursor.execute(
+        "SELECT value FROM settings WHERE guild_id = ? AND setting = ?",
+        (guild_id, "blocked_roles")
+    ).fetchall()
+    return {
+        int(role_id_str) for (role_id_str,) in blocked_roles if str(role_id_str).isdigit()
+    }
+
+
 async def get_poll_vote_result(
     poll_channel: discord.TextChannel,
     title: str,
@@ -904,6 +993,7 @@ async def get_poll_vote_result(
     message_id: int,
     emote: str,
     fetch_limiter: asyncio.Semaphore,
+    blocked_role_ids: set[int],
 ):
     message = None
     async with fetch_limiter:
@@ -938,15 +1028,7 @@ async def get_poll_vote_result(
         return None
 
     count = 0
-    # Cache blocked users for this guild
     guild = poll_channel.guild
-    blocked_roles = cursor.execute(
-        "SELECT value FROM settings WHERE guild_id = ? AND setting = ?",
-        (guild.id, "blocked_roles")
-    ).fetchall()
-    blocked_role_ids = {
-        int(role_id_str) for (role_id_str,) in blocked_roles if str(role_id_str).isdigit()
-    }
 
     def is_blocked(member):
         # Allow users with manage_messages or higher perms to bypass block
@@ -962,6 +1044,11 @@ async def get_poll_vote_result(
             break
 
     if target_reaction is not None:
+        # Fast path when there are no blocked roles: use reaction count directly.
+        if not blocked_role_ids:
+            count = max(target_reaction.count - (1 if target_reaction.me else 0), 0)
+            return [title, count, cover_url]
+
         users = []
         try:
             # Fetch all users for the reaction concurrently in batches
@@ -988,30 +1075,45 @@ async def get_poll_vote_result(
                 continue
             count += 1
 
-    return [title, count, cover_url]
+    return (message_id, title, count, cover_url)
 
 
 async def get_poll_winners(poll_channel: discord.TextChannel, poll_list):
     first = [["dummy", 0, ""]]
     second = [["dummy2", 0, ""]]
 
-    fetch_limiter = asyncio.Semaphore(MAX_CONCURRENT_POLL_FETCHES)
-    tasks = [
-        get_poll_vote_result(
-            poll_channel,
-            title,
-            cover_url,
-            message_id,
-            emote,
-            fetch_limiter,
-        )
-        for _anime_id, title, cover_url, message_id, emote in poll_list
-        if message_id is not None
-    ]
+    guild_id = poll_channel.guild.id
+    blocked_role_ids = get_blocked_role_ids_for_guild(guild_id)
+    guild_vote_cache = POLL_VOTE_CACHE.setdefault(guild_id, {})
 
-    vote_results = [
+    fetch_limiter = asyncio.Semaphore(MAX_CONCURRENT_POLL_FETCHES)
+    tasks = []
+    vote_results = []
+    for _anime_id, title, cover_url, message_id, emote in poll_list:
+        if message_id is None:
+            continue
+        # Fast path: use in-memory count cache when we already have this value.
+        if message_id in guild_vote_cache:
+            vote_results.append([title, guild_vote_cache[message_id], cover_url])
+            continue
+        tasks.append(
+            get_poll_vote_result(
+                poll_channel,
+                title,
+                cover_url,
+                message_id,
+                emote,
+                fetch_limiter,
+                blocked_role_ids,
+            )
+        )
+
+    fetched_results = [
         result for result in await asyncio.gather(*tasks) if result is not None
     ]
+    for msg_id, title, count, cover_url in fetched_results:
+        guild_vote_cache[msg_id] = count
+        vote_results.append([title, count, cover_url])
 
     if not vote_results:
         return first, second
@@ -1131,6 +1233,7 @@ async def disable_live_winner_for_guild(guild: discord.Guild, delete_message: bo
     pending_task = LIVE_WINNER_REFRESH_TASKS.pop(guild.id, None)
     if pending_task and not pending_task.done():
         pending_task.cancel()
+    POLL_VOTE_CACHE.pop(guild.id, None)
 
     live_msg_id = server_settings.get_id("LIVE_WINNER_MESSAGE_ID", 0)
     if not live_msg_id:
@@ -1958,6 +2061,7 @@ def check_blocked_roles(member: discord.Member):
     blocked_roles = cursor.execute("SELECT * FROM settings WHERE guild_id = ? AND setting = ?", (guild_id, "blocked_roles")).fetchall()  # noqa: E501
     blocked_role_ids = {int(row[2]) for row in blocked_roles}
     return any(int(role.id) in blocked_role_ids for role in member.roles)
+
 
 async def main():
     await bot.add_cog(polls_group(bot))
