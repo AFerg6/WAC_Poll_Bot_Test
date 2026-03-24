@@ -190,6 +190,15 @@ CREATE TABLE IF NOT EXISTS settings (
 )
 ''')
 
+# Make suggestions table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS suggestions (
+    suggestion_id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    value TEXT NOT NULL
+)
+''')
 
 # load guild objects from the database
 cursor.execute("SELECT DISTINCT guild_id FROM settings")
@@ -2151,6 +2160,88 @@ def check_blocked_roles(member: discord.Member):
     blocked_role_ids = {int(row[2]) for row in blocked_roles}
     return any(int(role.id) in blocked_role_ids for role in member.roles)
 
+@bot.command(name="listblockedroles", brief="List roles blocked from voting in polls/requests")
+@commands.has_permissions(administrator=True)
+async def list_blocked_roles(ctx):
+    """List the roles that are currently blocked from voting in polls or adding requests(server mods excluded)"""  # noqa: E501
+    try:
+        guild_id = ctx.guild.id
+        blocked_roles = cursor.execute("SELECT * FROM settings WHERE guild_id = ? AND setting = ?", (guild_id, "blocked_roles")).fetchall()  # noqa: E501
+        if not blocked_roles:
+            await ctx.send("No roles are currently blocked from voting in polls or adding requests.")
+            return
+
+        role_mentions = []
+        for row in blocked_roles:
+            role_id = int(row[2])
+            role = ctx.guild.get_role(role_id)
+            if role:
+                role_mentions.append(role.mention)
+            else:
+                role_mentions.append(f"(Unknown Role ID {role_id})")
+
+        await ctx.send(f"Roles currently blocked from voting in polls and adding requests:\n{', '.join(role_mentions)}")  # noqa: E501
+    except Exception as e:
+        print(f"Error listing blocked roles: {e}")
+        await ctx.send("An error occurred while trying to list the blocked roles.")
+
+#decorator for blocked role check
+def check_blocked_roles():
+    def predicate(ctx):
+        return not check_blocked_roles(ctx.author)
+    return commands.check(predicate)
+
+@bot.command(name="suggesttheme", brief="Suggest a theme for anime night")
+@check_blocked_roles()
+async def suggest_theme(ctx, *, theme: str):
+    """Allow users to suggest themes for anime nights. These are stored in the bots database to be viewed by a moderator at a later time."""
+    try:
+        guild_id = ctx.guild.id
+        user_id = ctx.author.id
+        cursor.execute("INSERT INTO suggestions (guild_id, user_id, value) VALUES (?, ?, ?)", (guild_id, user_id, theme))  # noqa: E501
+        conn.commit()
+        await ctx.send(f"Your suggestion for the anime night theme has been received: `{theme}`")  # noqa: E501
+    except Exception as e:
+        print(f"Error saving suggestion: {e}")
+        await ctx.send("An error occurred while trying to save your suggestion. Please try again later.")
+
+@bot.command(name="viewsuggestions", brief="View suggested themes for anime night")
+@commands.has_permissions(kick_members=True)
+async def view_suggestions(ctx):
+    """View the suggested themes for anime nights that memebrs have submitted for the server. Displays the user that made the suggestion and the suggestion itself."""
+    try:
+        guild_id = ctx.guild.id
+        cursor.execute("SELECT suggestion_id, user_id, value FROM suggestions WHERE guild_id = ?", (guild_id,))  # noqa: E501
+        suggestions = cursor.fetchall()
+        if not suggestions:
+            await ctx.send("No suggestions have been submitted for this server.")
+            return
+        
+
+        for items in suggestions:
+            suggestion_id, user_id, theme = items
+            user = ctx.guild.get_member(user_id)
+            username = user.name if user else f"Unknown User ID {user_id}"
+            await ctx.send(f"Suggestion from {username}: `{theme} ({suggestion_id})`")  # noqa: E501
+    except Exception as e:
+        print(f"Error retrieving suggestions: {e}")
+        await ctx.send("An error occurred while trying to retrieve the suggestions.")
+
+@bot.command(name="deletesuggestion", brief="Delete a theme suggestion by its ID")
+@commands.has_permissions(kick_members=True)
+async def delete_suggestion(ctx, suggestion_id: int):
+    """Delete a theme suggestion by its ID."""
+    try:
+        guild_id = ctx.guild.id
+        cursor.execute("DELETE FROM suggestions WHERE suggestion_id = ? AND guild_id = ?", (suggestion_id, guild_id))
+        conn.commit()
+        if cursor.rowcount == 0:
+            await ctx.send("No suggestion found with that ID.")
+        else:
+            await ctx.send(f"Suggestion with ID {suggestion_id} has been deleted.")
+    except Exception as e:
+        print(f"Error deleting suggestion: {e}")
+        await ctx.send("An error occurred while trying to delete the suggestion.")
 
 async def main():
     await bot.add_cog(polls_group(bot))
