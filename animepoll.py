@@ -2186,13 +2186,13 @@ async def list_blocked_roles(ctx):
         await ctx.send("An error occurred while trying to list the blocked roles.")
 
 #decorator for blocked role check
-def check_blocked_roles():
+def is_blocked_roles():
     def predicate(ctx):
         return not check_blocked_roles(ctx.author)
     return commands.check(predicate)
 
 @bot.command(name="suggesttheme", brief="Suggest a theme for anime night")
-@check_blocked_roles()
+@is_blocked_roles()
 async def suggest_theme(ctx, *, theme: str):
     """Allow users to suggest themes for anime nights. These are stored in the bots database to be viewed by a moderator at a later time."""
     try:
