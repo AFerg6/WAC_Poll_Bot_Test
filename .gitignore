@@ -3,3 +3,6 @@ botdata.db
 auto_update_bot.sh
 *.log
 /__pycache__
+
+identity_verification.db
+.env
