@@ -9,9 +9,34 @@ import sqlite3
 import subprocess
 import os
 import sys
+import smtplib
+import time
+from email.message import EmailMessage
+from email.utils import formataddr
 
+# SMTP / role configuration
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_FROM = os.getenv("SMTP_FROM")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Grey Western Anime")
+ 
+from discord import app_commands
 from discord.ext import commands
 from config import TOKEN
+from dotenv import load_dotenv
+ 
+load_dotenv()
+
+def _getenv_int(name: str):
+    v = os.getenv(name)
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        return None
 
 
 intents = discord.Intents.default()
@@ -77,6 +102,14 @@ class GuildSettings:
             """, (self.guild_id, setting, value))  # noqa: E501
             print(f"added {setting} to db\n{self.guild_id, setting, value}")
             conn.commit()
+
+    def remove(self, setting: str):
+        self.settings.pop(setting, None)
+        cursor.execute(
+            "DELETE FROM settings WHERE guild_id = ? AND setting = ?",
+            (self.guild_id, setting),
+        )
+        conn.commit()
 
     def all_settings(self):
         return self.settings
@@ -200,6 +233,13 @@ CREATE TABLE IF NOT EXISTS suggestions (
 )
 ''')
 
+
+
+
+
+
+
+
 # load guild objects from the database
 cursor.execute("SELECT DISTINCT guild_id FROM settings")
 guild_ids = [row[0] for row in cursor.fetchall()]
@@ -225,6 +265,49 @@ def not_user(user_id):
 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Explain common input errors for verification commands."""
+    command_name = ctx.command.name if ctx.command else ""
+    verification_commands = {
+        "setverificationchannel",
+        "getverificationchannel",
+        "removeverificationchannel",
+        "setverifiedrole",
+        "setunverifiedrole",
+    }
+
+    if command_name not in verification_commands:
+        return
+
+    if isinstance(error, commands.CommandInvokeError):
+        error = error.original
+
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("You need administrator permissions to use this command.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        if command_name == "setverificationchannel":
+            await ctx.send("Please provide a text channel, for example: `!setverificationchannel #verification`.")
+        else:
+            await ctx.send("Please provide a role name, for example: `!setverifiedrole Verified`.")
+    elif isinstance(error, commands.ChannelNotFound):
+        await ctx.send(
+            "I could not find that channel. Mention a text channel such as `#verification` "
+            "or provide its channel ID."
+        )
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "That channel input is invalid. Mention an existing text channel, "
+            "such as `#verification`."
+        )
+    else:
+        print(f"Verification command error in {command_name}: {error}")
+        await ctx.send(
+            "I could not complete that verification command. "
+            "Please check the input and try again."
+        )
 
 
 async def resync_live_winner_state(reason: str):
@@ -1627,14 +1710,22 @@ class polls_group(commands.Cog, name='Polls'):
     async def set_user_role(self, ctx, *, role_name: str):
         """Change the user role that gets modified for viewing the polls and adding requests"""  # noqa: E501
         server_settings = guild_settings_cache.get(ctx.guild.id)
+        if server_settings is None:
+            server_settings = GuildSettings(ctx.guild.id)
+            guild_settings_cache[ctx.guild.id] = server_settings
         # Searches for role from given input
-        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        normalized_role_name = role_name.strip().casefold()
+        role = next(
+            (guild_role for guild_role in ctx.guild.roles
+             if guild_role.name.casefold() == normalized_role_name),
+            None,
+        )
         if role is None:
             await ctx.send(f"Role `{role_name}` not found.")
             return
 
         # If found store id
-        server_settings.set("USER_ROLE_ID", role.id)
+        save_server_setting(server_settings, "USER_ROLE_ID", role.id)
         await ctx.send(f"User role set to `{role.name}` with ID `{role.id}`.")  # noqa: E501
 
     # --------- AUTO POPULATE POLL LIST
@@ -1805,7 +1896,133 @@ class emote_group(commands.Cog, name='Emotes'):
         )
 
 
-# #updates the bot on command hopefully
+class verification_group(commands.Cog, name='Verification'):
+    def __init__(self, bot):
+            self.bot = bot
+
+    @commands.command(name="setverificationchannel", brief="Set verification channel")
+    @commands.has_permissions(administrator=True)
+    async def set_verification_channel(
+        self, ctx, channel: discord.TextChannel = None
+    ):
+        """Set the verification channel for this server."""
+        # Implementation for setting the verification channel
+
+        # Check if the channel is a text channel
+        if channel is None:
+            await ctx.send(
+                "Please provide a text channel, for example: `!setverificationchannel #verification`."
+            )
+            return
+        if not isinstance(channel, discord.TextChannel):
+            await ctx.send("Please provide a valid text channel.")
+            return
+
+        # Save the verification channel ID in the server settings
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        if server_settings is None:
+            server_settings = GuildSettings(ctx.guild.id)
+            guild_settings_cache[ctx.guild.id] = server_settings
+
+            
+        save_server_setting(server_settings, "VERIFICATION_CHANNEL_ID", channel.id)
+
+        await ctx.send(f"Verification channel set to {channel.mention}.")
+
+    @commands.command(name="getverificationchannel", brief="Get verification channel")
+    @commands.has_permissions(administrator=True)
+    async def get_verification_channel(self, ctx):
+        """Get the current verification channel for this server."""
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        if server_settings is None:
+            server_settings = GuildSettings(ctx.guild.id)
+            guild_settings_cache[ctx.guild.id] = server_settings
+
+        channel_id = server_settings.get_id("VERIFICATION_CHANNEL_ID", None)
+
+        if channel_id is None:
+            await ctx.send("No verification channel has been set for this server.")
+            return
+
+        channel = ctx.guild.get_channel(channel_id)
+        if channel is None:
+            await ctx.send("The verification channel set for this server no longer exists.")
+            return
+
+        await ctx.send(f"The current verification channel is {channel.mention}.")
+
+    @commands.command(name="removeverificationchannel", brief="Remove verification channel")
+    @commands.has_permissions(administrator=True)
+    async def remove_verification_channel(self, ctx):
+        """Remove the verification channel for this server."""
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        if server_settings is None:
+            server_settings = GuildSettings(ctx.guild.id)
+            guild_settings_cache[ctx.guild.id] = server_settings
+        if "VERIFICATION_CHANNEL_ID" in server_settings.settings:
+            server_settings.remove("VERIFICATION_CHANNEL_ID")
+            await ctx.send("Verification channel has been removed.")
+        else:
+            await ctx.send("No verification channel is set for this server.")
+
+    @commands.command(name="setverifiedrole", brief="Set verified role")
+    @commands.has_permissions(administrator=True)
+    async def set_verified_role(self, ctx, *, role_name: str = ""):
+        """Set the role that will be assigned to verified users."""
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        if server_settings is None:
+            server_settings = GuildSettings(ctx.guild.id)
+            guild_settings_cache[ctx.guild.id] = server_settings
+        # Searches for role from given input
+        normalized_role_name = role_name.strip().casefold()
+        if not normalized_role_name:
+            await ctx.send(
+                "Please provide a role name, for example: `!setverifiedrole Verified`."
+            )
+            return
+        role = next(
+            (guild_role for guild_role in ctx.guild.roles
+             if guild_role.name.casefold() == normalized_role_name),
+            None,
+        )
+        if role is None:
+            await ctx.send(f"Role `{role_name}` not found.")
+            return
+
+        save_server_setting(server_settings, "VERIFIED_ROLE_ID", role.id)
+
+        await ctx.send(f"Verified role set to {role.name}.")
+
+    @commands.command(name="setunverifiedrole", brief="Set unverified role")
+    @commands.has_permissions(administrator=True)
+    async def set_unverified_role(self, ctx, *, role_name: str = ""):
+        """Set the role that will be assigned to verified users."""
+        server_settings = guild_settings_cache.get(ctx.guild.id)
+        if server_settings is None:
+            server_settings = GuildSettings(ctx.guild.id)
+            guild_settings_cache[ctx.guild.id] = server_settings
+        # Searches for role from given input
+        normalized_role_name = role_name.strip().casefold()
+        if not normalized_role_name:
+            await ctx.send(
+                "Please provide a role name, for example: `!setunverifiedrole Unverified`."
+            )
+            return
+        role = next(
+            (guild_role for guild_role in ctx.guild.roles
+             if guild_role.name.casefold() == normalized_role_name),
+            None,
+        )
+        if role is None:
+            await ctx.send(f"Role `{role_name}` not found.")
+            return
+
+        save_server_setting(server_settings, "UNVERIFIED_ROLE_ID", role.id)
+
+        await ctx.send(f"Unverified role set to {role.name}.")
+
+
+# #updates the bot on command hopefu/slly
 @bot.command(name="updatebot", brief="Update bot from git page")
 @is_owner()
 async def update_bot(ctx):
@@ -2246,6 +2463,7 @@ async def delete_suggestion(ctx, suggestion_id: int):
 async def main():
     await bot.add_cog(polls_group(bot))
     await bot.add_cog(emote_group(bot))
+    await bot.add_cog(verification_group(bot))
     await bot.start(TOKEN)
 
 asyncio.run(main())
